@@ -27,8 +27,9 @@ class Backup:
         self.meta_file_path = os.path.join(current_dir, "../../../FIM_Backup/backup_metadata.json")  # where all the files hash and information will be stored.
         self.backup_log_path = os.path.join(current_dir, "../../../FIM_Backup/Backup_logs.json")  # where all the backup logs will be stored.
 
-        self.fim_monitor = FIM_monitor()
+        self.fim_monitor = FIM_monitor()  # fim_utils class for hash calculation
 
+        # create directories or files if not exists
         os.makedirs(self.backup_root, exist_ok=True)
         os.makedirs(os.path.dirname(self.meta_file_path), exist_ok=True)
         os.makedirs(os.path.dirname(self.backup_log_path), exist_ok=True)
@@ -37,9 +38,6 @@ class Backup:
 
     def load_metadata(self):
         """Load backup metadata from file"""
-        if not os.path.exists(self.meta_file_path):
-            return {}
-
         try:
             with open(self.meta_file_path, "r") as f:
                 return json.load(f)
@@ -48,6 +46,7 @@ class Backup:
 
     def save_metadata(self):
         """Save updated metadata"""
+    # this will direct write the new metadata which leads to first erase the old once or the one who never changed needs to fix
         try:
             with open(self.meta_file_path, "w") as f:
                 json.dump(self.metadata, f, indent=4)
@@ -134,7 +133,10 @@ class Backup:
                     if current_hash is None:
                         continue
 
+                    print(f"Current hash: {current_hash}")
+
                     prev_hash = current_dir_metadata.get(rel_path, {}).get("hash")
+                    print(f"Previous hash: {prev_hash}")
 
                     if current_hash != prev_hash:
                         os.makedirs(os.path.dirname(dest_file), exist_ok=True)
