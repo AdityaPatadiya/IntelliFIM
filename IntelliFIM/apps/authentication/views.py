@@ -9,6 +9,7 @@ from typing import cast
 from .models import User
 from .serializers import (UserSerializer, UserCreateSerializer, 
                          UserLoginSerializer, UserUpdateSerializer)
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register(request):
@@ -24,6 +25,7 @@ def register(request):
                       (" You are the administrator." if user.is_admin else "")
         }, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def login(request):

@@ -18,40 +18,39 @@ fim_monitor = MonitorChanges()
 def start_fim_monitoring(request):
     if not request.user.is_admin:
         return Response({'detail': 'Admin access required'}, status=status.HTTP_403_FORBIDDEN)
-    
+
     serializer = FIMStartRequestSerializer(data=request.data)
-    if serializer.is_valid():
-        directories = serializer.validated_data['directories']
-        excluded_files = serializer.validated_data.get('excluded_files', [])
-        
-        # Verify directories exist
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    validated = getattr(serializer, 'validated_data', {}) or {}
+    directories = validated.get('directories', [])
+    excluded_files = validated.get('excluded_files', [])
+
+    for directory in directories:
+        if not os.path.exists(directory):
+            return Response(
+                {'detail': f'Directory does not exist: {directory}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    with transaction.atomic(using='fim_db'):
         for directory in directories:
-            if not os.path.exists(directory):
-                return Response(
-                    {'detail': f'Directory does not exist: {directory}'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        
-        # Create directory records
-        with transaction.atomic(using='fim_db'):
-            for directory in directories:
-                Directory.objects.using('fim_db').get_or_create(path=directory)
-        
-        # Start monitoring (you might want to use Celery for background tasks)
-        fim_monitor.monitor_changes(
-            request.user.username,
-            directories,
-            excluded_files,
-            None  # DB session - will need to adapt for Django ORM
-        )
-        
-        return Response({
-            'message': 'FIM monitoring started successfully',
-            'directories': directories,
-            'excluded_files': excluded_files
-        })
-    
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            Directory.objects.using('fim_db').get_or_create(path=directory)
+
+    # Start monitoring (you might want to use Celery for background tasks)
+    fim_monitor.monitor_changes(
+        request.user.username,
+        directories,
+        excluded_files,
+        None  # DB session - will need to adapt for Django ORM
+    )
+
+    return Response({
+        'message': 'FIM monitoring started successfully',
+        'directories': directories,
+        'excluded_files': excluded_files
+    })
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
