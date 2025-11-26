@@ -46,7 +46,6 @@ class Backup:
 
     def save_metadata(self):
         """Save updated metadata"""
-    # this will direct write the new metadata which leads to first erase the old once or the one who never changed needs to fix
         try:
             with open(self.meta_file_path, "w") as f:
                 json.dump(self.metadata, f, indent=4)
