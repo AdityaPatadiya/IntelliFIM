@@ -8,7 +8,7 @@ from src.api.database.connection import get_auth_db, get_fim_db
 from src.api.utils.jwt_utils import verify_token
 from src.api.models.user_model import User
 from src.api.models.fim_models import Directory, FileMetadata
-from src.FIM.FIM import monitor_changes
+from src.FIM.FIM import MonitorChanges
 from src.utils.backup import Backup
 
 # Import schemas
@@ -46,7 +46,7 @@ def verify_admin_access(token_data: dict = Depends(verify_token), db: Session = 
 
 router = APIRouter(prefix="/api/fim", tags=["File Integrity Monitoring"])
 
-fim_monitor = monitor_changes()
+fim_monitor = MonitorChanges()
 
 
 @router.post("/start", summary="Start monitoring directories")

@@ -13,12 +13,14 @@ from src.config.logging_config import configure_logger
 
 
 class FIMEventHandler(FileSystemEventHandler):
-    def __init__(self, parent, logger, db_session):
+    def __init__(self, parent, logger, db_session, auth_username):
         super().__init__()
-        self.parent: monitor_changes = parent
+        self.parent = parent
         self.logger = logger
         self.directory_path = None
         self.db_session = db_session
+        self.auth_username = auth_username
+        self.backup_instance = Backup()
         self.database_instance = DatabaseOperation(db_session)
 
     def _get_directory_path(self, event_path):
@@ -39,6 +41,13 @@ class FIMEventHandler(FileSystemEventHandler):
                 is_file = True
 
             self.parent.file_folder_addition(_path, current_hash, is_file, self.logger, self.database_instance)
+
+            if not event.is_directory:
+                for monitored_dir in self.parent.current_directories:
+                    if str(_path).startswith(monitored_dir):
+                        self.backup_instance.create_backup(monitored_dir, self.auth_username)
+                        break
+
         except Exception as e:
             self.logger.error(f"Creation error: {str(e)}")
 
@@ -57,6 +66,13 @@ class FIMEventHandler(FileSystemEventHandler):
             file_path = str(_path)
             original_hash = self.database_instance.get_current_baseline(dir_path).get(file_path, {}).get('hash', '')
             self.parent.file_folder_modification(_path, current_hash, original_hash, is_file, self.logger, self.database_instance)
+
+            if not event.is_directory:
+                for monitored_dir in self.parent.current_directories:
+                    if str(_path).startswith(monitored_dir):
+                        self.backup_instance.create_backup(monitored_dir, self.auth_username)
+                        break
+
         except Exception as e:
             self.logger.error(f"Modification error: {str(e)}")
 
@@ -75,7 +91,7 @@ class FIMEventHandler(FileSystemEventHandler):
             self.logger.error(f"Deletion error: {str(e)}")
 
 
-class monitor_changes:
+class MonitorChanges:
     def __init__(self):
         self.logs_dir = Path(__file__).resolve().parent.parent / "../logs"
         self.logs_dir.mkdir(exist_ok=True, parents=True)
@@ -89,6 +105,7 @@ class monitor_changes:
         self.current_directories = []
         self.event_handlers = []
         self.current_logger = None
+        self.auth_username = None
 
         # Core Components
         self.observer = Observer()
@@ -118,7 +135,6 @@ class monitor_changes:
             else:
                 previous_hash = self.reported_changes["modified"][_path].get("hash", original_hash)
                 if current_hash != previous_hash:
-                    print(f"logger: {logger}\n")
                     logger.error(f"{change_type} modified again: {_path}")
                     self.reported_changes["modified"][_path] = {
                         "hash": current_hash,
@@ -142,6 +158,7 @@ class monitor_changes:
     def monitor_changes(self, auth_username, directories, excluded_files, db_session):
         """Monitor specified directories for changes using Watchdog."""
         try:
+            self.auth_username = auth_username
             self.current_directories = directories
             database_instance = DatabaseOperation(db_session) if db_session else None
 
@@ -149,12 +166,12 @@ class monitor_changes:
                 if not os.path.exists(directory):
                     raise FileNotFoundError(f"Directory {directory} does not exist")
                 try:
-                    self.backup_instance.create_backup(directory, auth_username)
+                    self.backup_instance.create_backup(directory, self.auth_username)
                 except Exception as e:
                     print(f"Failed to create backup for {directory}")
                     continue
 
-                baseline = self.fim_instance.tracking_directory(auth_username, directory, db_session)
+                baseline = self.fim_instance.tracking_directory(self.auth_username, directory, db_session)
                 if database_instance:
                     for path, data in baseline.items():
                         database_instance.record_file_event(
@@ -170,10 +187,10 @@ class monitor_changes:
                 if directory in excluded_files:
                     continue
 
-                logger = self.configure_logger._get_or_create_logger(auth_username, directory)
+                logger = self.configure_logger._get_or_create_logger(self.auth_username, directory)
                 logger.info(f"Starting monitoring for {directory}")
 
-                event_handler = FIMEventHandler(self, logger, db_session)
+                event_handler = FIMEventHandler(self, logger, db_session, self.auth_username)
                 event_handler.directory_path = directory
                 self.observer.schedule(event_handler, directory, recursive=True)
                 self.event_handlers.append(event_handler)
