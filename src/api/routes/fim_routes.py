@@ -1,8 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import EventSourceResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional, cast
 import os
 from pathlib import Path
+import asyncio
+import json
 
 from src.api.database.connection import get_auth_db, get_fim_db
 from src.api.utils.jwt_utils import verify_token
@@ -21,6 +24,10 @@ from src.api.schemas.fim_schema import (
     FIMChangesResponse,
     FIMLogsResponse
 )
+
+
+FIM_LOOP = asyncio.get_event_loop()
+event_queue = asyncio.Queue()
 
 
 def handle_fim_errors(func):
@@ -114,6 +121,19 @@ def stop_fim_monitoring(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to stop monitoring: {str(e)}")
+
+@router.get("/stream", summary="Real-time FIM change stream")
+async def stream_fim_events():
+    """
+    SSE endpoint to stream real-time file change evnets.
+    """
+
+    async def event_generator():
+        while True:
+            event = await event_queue.get()
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return EventSourceResponse(event_generator())
 
 @router.get("/status", response_model=FIMStatusResponse, summary="Get monitoring status")
 def get_fim_status(

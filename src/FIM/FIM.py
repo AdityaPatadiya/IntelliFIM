@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import asyncio
 from pathlib import Path
 from datetime import datetime
 from watchdog.observers import Observer
@@ -10,6 +11,15 @@ from src.utils.backup import Backup
 from src.utils.database import DatabaseOperation
 from src.FIM.fim_utils import FIM_monitor
 from src.config.logging_config import configure_logger
+from src.api.routes.fim_routes import event_queue, FIM_LOOP
+
+
+async def push_event(change_type, file_path, details):
+    await event_queue.put({
+        "type": change_type,
+        "path": file_path,
+        "details": details
+    })
 
 
 class FIMEventHandler(FileSystemEventHandler):
@@ -115,22 +125,33 @@ class MonitorChanges:
 
     def file_folder_addition(self, _path, current_hash, is_file, logger, database_instance):
         change_type = "File" if is_file else "Folder"
+        timestamp = self.fim_instance.get_formatted_time(os.path.getmtime(_path))
+
         if _path not in self.reported_changes["added"]:
             logger.warning(f"{change_type} is added: {_path}")
             self.reported_changes["added"][_path] = {
                 "hash": current_hash,
-                "last_modified": self.fim_instance.get_formatted_time(os.path.getmtime(_path))
+                "last_modified": timestamp
             }
+
+        asyncio.run_coroutine_threadsafe(
+            push_event("added", _path, {
+                "hash": current_hash,
+                "timestamp": timestamp
+            }),
+            FIM_LOOP
+        )
 
     def file_folder_modification(self, _path, current_hash, original_hash, is_file, logger, database_instance):
         change_type = "File" if is_file else "Folder"
+        timestamp = self.fim_instance.get_formatted_time(os.path.getmtime(_path))
 
         if current_hash != original_hash:
             if _path not in self.reported_changes["modified"]:
                 logger.error(f"{change_type} modified: {_path}")
                 self.reported_changes["modified"][_path] = {
                     "hash": current_hash,
-                    "last_modified": self.fim_instance.get_formatted_time(os.path.getmtime(_path))
+                    "last_modified": timestamp
                 }
             else:
                 previous_hash = self.reported_changes["modified"][_path].get("hash", original_hash)
@@ -138,22 +159,39 @@ class MonitorChanges:
                     logger.error(f"{change_type} modified again: {_path}")
                     self.reported_changes["modified"][_path] = {
                         "hash": current_hash,
-                        "last_modified": self.fim_instance.get_formatted_time(os.path.getmtime(_path))
+                        "last_modified": timestamp
                     }
         else:
             if _path in self.reported_changes["modified"]:
                 del self.reported_changes["modified"][_path]
 
+        asyncio.run_coroutine_threadsafe(
+            push_event("modified", _path, {
+                "hash": current_hash,
+                "timestamp": timestamp
+            }),
+            FIM_LOOP
+        )
+
     def file_folder_deletion(self, _path, original_hash, is_file, logger, database_instance):
         change_type = "File" if is_file else "Folder"
+        dir_path = os.path.dirname(_path)
+        baseline = database_instance.get_current_baseline(dir_path)
+        timestamp = baseline.get(_path, {}).get("last_modified", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
         if _path not in self.reported_changes["deleted"]:
-            last_modified = database_instance.get_current_baseline(_path).get('last_modified', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
             logger.warning(f"{change_type} deleted: {_path}")
             self.reported_changes["deleted"][_path] = {
                 "hash": original_hash,
-                "last_modified": last_modified
+                "last_modified": timestamp
             }
+
+        asyncio.run_coroutine_threadsafe(
+            push_event("deleted", _path, {
+                "timestamp": timestamp
+            }),
+            FIM_LOOP
+        )
 
     def monitor_changes(self, auth_username, directories, excluded_files, db_session):
         """Monitor specified directories for changes using Watchdog."""
