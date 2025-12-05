@@ -2,8 +2,10 @@ import os
 import time
 import json
 import asyncio
+import threading
 from pathlib import Path
 from datetime import datetime
+import concurrent.futures
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -11,7 +13,8 @@ from src.utils.backup import Backup
 from src.utils.database import DatabaseOperation
 from src.FIM.fim_utils import FIM_monitor
 from src.config.logging_config import configure_logger
-from src.api.routes.fim_routes import event_queue, FIM_LOOP
+from src.FIM.fim_shared import event_queue, get_fim_loop
+from src.utils.thread_pool import thread_pool
 
 
 async def push_event(change_type, file_path, details):
@@ -33,6 +36,10 @@ class FIMEventHandler(FileSystemEventHandler):
         self.backup_instance = Backup()
         self.database_instance = DatabaseOperation(db_session)
 
+        # Cache for hashing results to avoid recomputing
+        self.hash_cache = {}
+        self.cache_timeout = 5.0  # Cache hash for 5 seconds
+
     def _get_directory_path(self, event_path):
         """Extract monitored directory path from event path"""
         for dir_path in self.parent.current_directories:
@@ -40,22 +47,91 @@ class FIMEventHandler(FileSystemEventHandler):
                 return dir_path
         return os.path.dirname(event_path)
 
+    def _get_timestamp_safe(self, path):
+        """Safely get modification timestamp with error handling."""
+        try: 
+            return self.parent.fim_instance.get_formatted_time(os.path.getmtime(path))
+        except (FileNotFoundError, OSError):
+            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def _get_cached_hash(self, path, is_folder=False):
+        """Get cached hash if available and not expired."""
+        current_time = time.time()
+        if path in self.hash_cache:
+            cached_time, cached_hash = self.hash_cache[path]
+            if current_time - cached_time < self.cache_timeout:
+                return cached_hash
+        return None
+
+    def _calculate_hash_async(self, path, is_folder=False):
+        """Calculate hash in thread pool and cache result."""
+        cached_hash = self._get_cached_hash(path, is_folder)
+        if cached_hash is not None:
+            return cached_hash
+        
+        if is_folder:
+            future = thread_pool.submit(
+                self.parent.fim_instance.calculate_folder_hash,
+                str(path)
+            )
+        else:
+            future = thread_pool.submit(
+                self.parent.fim_instance.calculate_hash,
+                str(path)
+            )
+
+        try:
+            current_hash = future.result(timeout=10.0)  # 10 second timeout
+            # Cache the result
+            self.hash_cache[path] = (time.time(), current_hash)
+            return current_hash
+        except concurrent.futures.TimeoutError:
+            self.logger.error(f"Hashing timeout for: {path}")
+            return "TIMEOUT_ERROR"
+        except Exception as e:
+            self.logger.error(f"Hashing error for {path}: {str(e)}")
+            return "HASH_ERROR"
+    
+    def _should_backup(self, path):
+        """Determine if backup should be created for this change.
+           Don't backup too frequently - only if file hasn't been backed up recently.
+        """
+        backup_key = f"backup_{path}"
+        current_time = time.time()
+
+        if hasattr(self, '_last_backup_time'):
+            if backup_key in self._last_backup_time:
+                last_time = self._last_backup_time[backup_key]
+                # Only backup if 5 seconds has passed.
+                if current_time - last_time < 5.0:
+                    return False
+        
+        if not hasattr(self, '_last_backup_time'):
+            self._last_backup_time = {}
+        self._last_backup_time[backup_key] = current_time
+        return True
+
     def on_created(self, event):
         try:
             _path = event.src_path
             if event.is_directory:
-                current_hash = self.parent.fim_instance.calculate_folder_hash(_path if isinstance(_path, str) else str(_path))
+                current_hash = self._calculate_hash_async(_path, is_folder=True)
                 is_file = False
             else:
-                current_hash = self.parent.fim_instance.calculate_hash(_path if isinstance(_path, str) else str(_path))
-                is_file = True
+                current_hash = self._calculate_hash_async(_path, is_folder=False)
 
-            self.parent.file_folder_addition(_path, current_hash, is_file, self.logger, self.database_instance)
+            thread_pool.submit(
+                self.parent.file_folder_addition,
+                _path, current_hash, is_file, self.logger, self.database_instance
+            )
 
-            if not event.is_directory:
+            if not event.is_directory and self._should_backup(_path):
                 for monitored_dir in self.parent.current_directories:
                     if str(_path).startswith(monitored_dir):
-                        self.backup_instance.create_backup(monitored_dir, self.auth_username)
+                        thread_pool.submit(
+                            self.backup_instance.create_backup,
+                            monitored_dir, self.auth_username
+                        )
                         break
 
         except Exception as e:
@@ -66,21 +142,32 @@ class FIMEventHandler(FileSystemEventHandler):
             _path = event.src_path
 
             if event.is_directory:
-                current_hash = self.parent.fim_instance.calculate_folder_hash(_path if isinstance(_path, str) else str(_path))
+                current_hash = self._calculate_hash_async(_path, is_folder=True)
                 is_file = False
             else:
-                current_hash = self.parent.fim_instance.calculate_hash(_path if isinstance(_path, str) else str(_path))
-                is_file = True
+                current_hash = self._calculate_hash_async(_path, is_folder=False)
 
             dir_path = str(self._get_directory_path(_path))
             file_path = str(_path)
-            original_hash = self.database_instance.get_current_baseline(dir_path).get(file_path, {}).get('hash', '')
-            self.parent.file_folder_modification(_path, current_hash, original_hash, is_file, self.logger, self.database_instance)
+            original_hash = ""
+            try:
+                baseline = self.database_instance.get_current_baseline(dir_path)
+                original_hash = baseline.get(file_path, {}).get('hash', '')
+            except Exception:
+                pass
 
-            if not event.is_directory:
+            thread_pool.submit(
+                self.parent.file_folder_modification,
+                _path, current_hash, original_hash, is_file, self.logger, self.database_instance
+            )
+
+            if not event.is_directory and current_hash != original_hash and self._should_backup(_path):
                 for monitored_dir in self.parent.current_directories:
                     if str(_path).startswith(monitored_dir):
-                        self.backup_instance.create_backup(monitored_dir, self.auth_username)
+                        thread_pool.submit(
+                            self.backup_instance.create_backup,
+                            monitored_dir, self.auth_username
+                        )
                         break
 
         except Exception as e:
@@ -95,8 +182,22 @@ class FIMEventHandler(FileSystemEventHandler):
                 is_file = True
             dir_path = str(self._get_directory_path(_path))
             file_path = str(_path)
-            original_hash = self.database_instance.get_current_baseline(dir_path).get(file_path, {}).get('hash', '')
-            self.parent.file_folder_deletion(_path, original_hash, is_file, self.logger, self.database_instance)
+
+            original_hash = ""
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                baseline = self.database_instance.get_current_baseline(dir_path)
+
+                path_norm = os.path.normpath(file_path)
+                original_hash = baseline.get(path_norm, {}).get('hash', '')
+                timestamp = baseline.get(path_norm, {}).get('last_modified', timestamp)
+            except Exception:
+                pass
+            
+            thread_pool.submit(
+                self.parent.file_folder_deletion,
+                _path, original_hash, is_file, self.logger, self.database_instance
+            )
         except Exception as e:
             self.logger.error(f"Deletion error: {str(e)}")
 
@@ -116,6 +217,7 @@ class MonitorChanges:
         self.event_handlers = []
         self.current_logger = None
         self.auth_username = None
+        self.db_session = None
 
         # Core Components
         self.observer = Observer()
@@ -123,9 +225,11 @@ class MonitorChanges:
         self.fim_instance = FIM_monitor()
         self.configure_logger = configure_logger()
 
+        self.parent_thread_pool = thread_pool
+
     def file_folder_addition(self, _path, current_hash, is_file, logger, database_instance):
         change_type = "File" if is_file else "Folder"
-        timestamp = self.fim_instance.get_formatted_time(os.path.getmtime(_path))
+        timestamp = self._get_timestamp_safe(_path)
 
         if _path not in self.reported_changes["added"]:
             logger.warning(f"{change_type} is added: {_path}")
@@ -139,12 +243,12 @@ class MonitorChanges:
                 "hash": current_hash,
                 "timestamp": timestamp
             }),
-            FIM_LOOP
+            get_fim_loop()
         )
 
     def file_folder_modification(self, _path, current_hash, original_hash, is_file, logger, database_instance):
         change_type = "File" if is_file else "Folder"
-        timestamp = self.fim_instance.get_formatted_time(os.path.getmtime(_path))
+        timestamp = self._get_timestamp_safe(_path)
 
         if current_hash != original_hash:
             if _path not in self.reported_changes["modified"]:
@@ -170,14 +274,12 @@ class MonitorChanges:
                 "hash": current_hash,
                 "timestamp": timestamp
             }),
-            FIM_LOOP
+            get_fim_loop()
         )
 
     def file_folder_deletion(self, _path, original_hash, is_file, logger, database_instance):
         change_type = "File" if is_file else "Folder"
-        dir_path = os.path.dirname(_path)
-        baseline = database_instance.get_current_baseline(dir_path)
-        timestamp = baseline.get(_path, {}).get("last_modified", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         if _path not in self.reported_changes["deleted"]:
             logger.warning(f"{change_type} deleted: {_path}")
@@ -190,36 +292,40 @@ class MonitorChanges:
             push_event("deleted", _path, {
                 "timestamp": timestamp
             }),
-            FIM_LOOP
+            get_fim_loop()
         )
+
+    def _get_timestamp_safe(self, path):
+        """Safely get modification timestamp with error handling."""
+        try: 
+            return self.fim_instance.get_formatted_time(os.path.getmtime(path))
+        except (FileNotFoundError, OSError):
+            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def monitor_changes(self, auth_username, directories, excluded_files, db_session):
         """Monitor specified directories for changes using Watchdog."""
         try:
             self.auth_username = auth_username
             self.current_directories = directories
+            self.db_session = db_session
             database_instance = DatabaseOperation(db_session) if db_session else None
 
+            # initialize baselines in thread pool
+            futures = []
             for directory in self.current_directories:
                 if not os.path.exists(directory):
                     raise FileNotFoundError(f"Directory {directory} does not exist")
-                try:
-                    self.backup_instance.create_backup(directory, self.auth_username)
-                except Exception as e:
-                    print(f"Failed to create backup for {directory}")
-                    continue
+                future = self.parent_thread_pool.submit(
+                    self._initialize_directory_baseline,
+                    directory, auth_username, db_session, database_instance
+                )
+                futures.append(future)
 
-                baseline = self.fim_instance.tracking_directory(self.auth_username, directory, db_session)
-                if database_instance:
-                    for path, data in baseline.items():
-                        database_instance.record_file_event(
-                            directory_path=directory,
-                            item_path=path,
-                            item_hash=data['hash'],
-                            item_type=data['type'],
-                            last_modified=data['last_modified'],
-                            status='current'
-                        )
+            for future in futures:
+                try:
+                    future.result(timeout=30.0)
+                except Exception as e:
+                    print(f"Warning: Failed to initialize baseline: {str(e)}") 
 
             for directory in self.current_directories:
                 if directory in excluded_files:
@@ -234,38 +340,76 @@ class MonitorChanges:
                 self.event_handlers.append(event_handler)
 
             self.observer.start()
-            try:
-                while True:
-                    time.sleep(1)  # Main thread sleep
-            except KeyboardInterrupt:
-                print("\nShutdown down...")
-                self.observer.stop()
-                self.observer.join()
-                self.configure_logger.shutdown()
-                self._save_reported_changes(db_session)
-                print("Shutdown complete.")
+            print(f"FIM monitoring started for {len(self.current_directories)} directories")
+
+            observer_thread = threading.Thread(
+                target=self._run_observer,
+                daemon=True
+            )
+            observer_thread.start()
+
         except Exception as e:
             if self.current_logger:
                 self.current_logger.error(f"Monitoring error: {e}")
             else:
                 self.observer.stop()
-                self.observer.join()  # Ensure observer is stopped even on error
-                self.configure_logger.shutdown()
-                print("Shutdown complete.")
+                self.observer.join()
+                print(f"Monitoring error: {e}")
+    
+    def _initialize_directory_baseline(self, directory, auth_username, db_session, database_instance):
+        """Initialize baseline for a directory (run in thread pool)."""
+        try:
+            self.backup_instance.create_backup(directory, auth_username)
+            baseline = self.fim_instance.tracking_directory(auth_username, directory, db_session)
+
+            if database_instance:
+                for path, data in baseline.items():
+                    database_instance.record_file_event(
+                        directory_path=directory,
+                        item_path=path,
+                        item_hash=data['hash'],
+                        item_type=data['type'],
+                        last_modified=data['last_modified'],
+                        status='current'
+                    )
+            print(f"Baseline initialized for {directory}")
+        except Exception as e:
+            print(f"Failed to initialize baseline for {directory}: {str(e)}")
+
+    def _run_observer(self):
+        """Run observer in a separate thread."""
+        try:
+            while self.observer.is_alive():
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nShutting down FIM monitor...")
+            self.observer.stop()
+            self.observer.join()
+            self._cleanup()
+            print("FIM monitor shutdown complete.")
+
+    def _cleanup(self):
+        """Cleanup resources."""
+        if hasattr(self, 'db_session') and self.db_session:
+            self._save_reported_changes(self.db_session)
 
     def _save_reported_changes(self, db_session):
         database_instance = DatabaseOperation(db_session)
         for change_type, changes in self.reported_changes.items():
             for path, data in changes.items():
                 directory = os.path.dirname(path)
-                database_instance.record_file_event(
-                    directory_path=directory,
-                    item_path=path,
-                    item_hash=data['hash'],
-                    item_type=data['type'],
-                    last_modified=data['last_modified'],
-                    status=change_type
-                )
+                try:
+                    item_type = "file" if os.path.isfile(path) else "folder"
+                    database_instance.record_file_event(
+                        directory_path=directory,
+                        item_path=path,
+                        item_hash=data.get('hash', ''),
+                        item_type=item_type,
+                        last_modified=data.get('last_modified', datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                        status=change_type
+                    )
+                except Exception as e:
+                    print(f"Error saving change for {path}: {str(e)}")
 
     def view_baseline(self, db_session=None):
         """View ALL baselines with datetime serialization support"""
@@ -313,10 +457,10 @@ class MonitorChanges:
                 database_instance.delete_directory_records(directory)
                 self.fim_instance.tracking_directory(auth_username, directory, db_session)
 
-                print(f"✅ Reset baseline for {directory}")
+                print(f"Reset baseline for {directory}")
 
             except Exception as e:
-                print(f"❌ Failed resetting baseline for {directory}: {str(e)}")
+                print(f"Failed resetting baseline for {directory}: {str(e)}")
 
     def view_logs(self, directory=None):
         """View logs safely with path validation"""

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from fastapi.responses import EventSourceResponse
+from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional, cast
 import os
@@ -13,6 +13,8 @@ from src.api.models.user_model import User
 from src.api.models.fim_models import Directory, FileMetadata
 from src.FIM.FIM import MonitorChanges
 from src.utils.backup import Backup
+from src.FIM.fim_shared import event_queue
+from src.utils.thread_pool import thread_pool
 
 # Import schemas
 from src.api.schemas.fim_schema import (
@@ -24,10 +26,6 @@ from src.api.schemas.fim_schema import (
     FIMChangesResponse,
     FIMLogsResponse
 )
-
-
-FIM_LOOP = asyncio.get_event_loop()
-event_queue = asyncio.Queue()
 
 
 def handle_fim_errors(func):
@@ -104,6 +102,7 @@ def start_fim_monitoring(
 @router.post("/stop", summary="Stop monitoring directories")
 def stop_fim_monitoring(
     request: FIMStopRequest,
+    fim_db: Session = Depends(get_fim_db)
 ):
     """
     Stop monitoring specified directories.
@@ -113,6 +112,9 @@ def stop_fim_monitoring(
         if hasattr(fim_monitor, 'observer') and fim_monitor.observer.is_alive():
             fim_monitor.observer.stop()
             fim_monitor.observer.join()
+
+            if hasattr(fim_monitor, 'db_session') and fim_monitor.db_session:
+                fim_monitor._save_reported_changes(fim_monitor.db_session)
 
         return {
             "message": "FIM monitoring stopped successfully",
@@ -266,7 +268,7 @@ def restore_files(
         # Restore the specified path
         result = backup_instance.restore_backup(
             request.path_to_restore,
-            admin_user.username  # ✅ Use admin_user
+            admin_user.username
         )
 
         if result:
