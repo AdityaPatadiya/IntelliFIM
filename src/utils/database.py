@@ -178,7 +178,3 @@ class DatabaseOperation:
             return [tuple(row) for row in result]
         except SQLAlchemyError as e:
             raise RuntimeError(f"Error fetching recent changes: {e}")
-
-    def __del__(self):
-        """Ensure DB session closes cleanly."""
-        self.db.close()

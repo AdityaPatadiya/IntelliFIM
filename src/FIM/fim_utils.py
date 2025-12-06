@@ -11,7 +11,6 @@ from src.config.logging_config import configure_logger
 
 class FIM_monitor:
     def __init__(self, db_session: Optional[Session] = None):
-        self.current_entries: Dict[str, Dict[str, Any]] = {}
         self.configure_logger = configure_logger()
         self.logger = None
 
@@ -24,7 +23,7 @@ class FIM_monitor:
         Track the monitored directory and store baseline in the database.
         Returns a dictionary of file/folder metadata.
         """
-        self.current_entries = {}
+        current_entries = {}
         self.logger = self.configure_logger._get_or_create_logger(auth_user, directory)
 
         database_instance = DatabaseOperation(db_session) if db_session else None
@@ -51,7 +50,7 @@ class FIM_monitor:
                 except Exception:
                     last_modified = self.get_formatted_time(time.time())
 
-                self.current_entries[folder_path] = {
+                current_entries[folder_path] = {
                     "type": "folder",
                     "hash": folder_hash,
                     "last_modified": last_modified,
@@ -94,7 +93,7 @@ class FIM_monitor:
                 except Exception:
                     last_modified = self.get_formatted_time(time.time())
 
-                self.current_entries[file_path] = {
+                current_entries[file_path] = {
                     "type": "file",
                     "hash": file_hash,
                     "size": os.path.getsize(file_path) if os.path.exists(file_path) else 0,
@@ -118,7 +117,7 @@ class FIM_monitor:
                             print(f"DB insert failed for file {file_path}: {e}")
                         print(f"DB insert failed for file {file_path}: {e}")
 
-        return self.current_entries
+        return current_entries
 
     # ---------------- Hash Functions ----------------
 

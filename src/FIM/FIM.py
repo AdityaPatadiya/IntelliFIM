@@ -2,6 +2,7 @@ import os
 import time
 import json
 import asyncio
+import traceback
 import threading
 from pathlib import Path
 from datetime import datetime
@@ -15,6 +16,7 @@ from src.FIM.fim_utils import FIM_monitor
 from src.config.logging_config import configure_logger
 from src.FIM.fim_shared import event_queue, get_fim_loop
 from src.utils.thread_pool import thread_pool
+from src.utils.database_manager import get_thread_local_fim_session, close_thread_local_fim_session
 
 
 async def push_event(change_type, file_path, details):
@@ -31,10 +33,9 @@ class FIMEventHandler(FileSystemEventHandler):
         self.parent = parent
         self.logger = logger
         self.directory_path = None
-        self.db_session = db_session
+        self.main_db_session = db_session
         self.auth_username = auth_username
         self.backup_instance = Backup()
-        self.database_instance = DatabaseOperation(db_session)
 
         # Cache for hashing results to avoid recomputing
         self.hash_cache = {}
@@ -111,18 +112,32 @@ class FIMEventHandler(FileSystemEventHandler):
         self._last_backup_time[backup_key] = current_time
         return True
 
+    def _process_addition(self, _path, current_hash, is_file):
+        """Process addition in thread pool with thread-local session."""
+        session = get_thread_local_fim_session()
+        try:
+            database_instance = DatabaseOperation(session)
+            self.parent.file_folder_addition(_path, current_hash, is_file, self.logger, database_instance)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            self.logger.error(f"Addition processing error: {str(e)}")
+        finally:
+            close_thread_local_fim_session()
+
     def on_created(self, event):
         try:
             _path = event.src_path
+            is_file = not event.is_directory
+
             if event.is_directory:
                 current_hash = self._calculate_hash_async(_path, is_folder=True)
-                is_file = False
             else:
                 current_hash = self._calculate_hash_async(_path, is_folder=False)
 
             thread_pool.submit(
-                self.parent.file_folder_addition,
-                _path, current_hash, is_file, self.logger, self.database_instance
+                self._process_addition,
+                _path, current_hash, is_file
             )
 
             if not event.is_directory and self._should_backup(_path):
@@ -137,31 +152,46 @@ class FIMEventHandler(FileSystemEventHandler):
         except Exception as e:
             self.logger.error(f"Creation error: {str(e)}")
 
+    def _process_modification(self, _path, current_hash, is_file, dir_path, file_path):
+        """Process modification in thread pool with thread-local session"""
+        session = get_thread_local_fim_session()
+        try:
+            database_instance = DatabaseOperation(session)
+
+            original_hash = ""
+            try:
+                baseline = database_instance.get_current_baseline(dir_path)
+                original_hash = baseline.get(file_path, {}).get('hash', '')
+            except Exception:
+                pass
+
+            self.parent.file_folder_modification(_path, current_hash, original_hash, is_file, self.logger, database_instance)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            self.logger.error(f"Modification processing error: {str(e)}")
+        finally:
+            close_thread_local_fim_session()
+
     def on_modified(self, event):
         try:
             _path = event.src_path
+            is_file = not event.is_directory
 
             if event.is_directory:
                 current_hash = self._calculate_hash_async(_path, is_folder=True)
-                is_file = False
             else:
                 current_hash = self._calculate_hash_async(_path, is_folder=False)
 
             dir_path = str(self._get_directory_path(_path))
             file_path = str(_path)
-            original_hash = ""
-            try:
-                baseline = self.database_instance.get_current_baseline(dir_path)
-                original_hash = baseline.get(file_path, {}).get('hash', '')
-            except Exception:
-                pass
 
             thread_pool.submit(
-                self.parent.file_folder_modification,
-                _path, current_hash, original_hash, is_file, self.logger, self.database_instance
+                self._process_modification,
+                _path, current_hash, is_file, dir_path, file_path
             )
 
-            if not event.is_directory and current_hash != original_hash and self._should_backup(_path):
+            if not event.is_directory and self._should_backup(_path):
                 for monitored_dir in self.parent.current_directories:
                     if str(_path).startswith(monitored_dir):
                         thread_pool.submit(
@@ -173,30 +203,40 @@ class FIMEventHandler(FileSystemEventHandler):
         except Exception as e:
             self.logger.error(f"Modification error: {str(e)}")
 
-    def on_deleted(self, event):
+    def _process_deletion(self, _path, is_file, dir_path, file_path):
+        """Process deletion in therad pool with thread-local session."""
+        session = get_thread_local_fim_session()
         try:
-            _path = event.src_path
-            if event.is_directory:
-                is_file = False
-            else:
-                is_file = True
-            dir_path = str(self._get_directory_path(_path))
-            file_path = str(_path)
+            database_instance = DatabaseOperation(session)
 
             original_hash = ""
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             try:
-                baseline = self.database_instance.get_current_baseline(dir_path)
-
+                baseline = database_instance.get_current_baseline(dir_path)
                 path_norm = os.path.normpath(file_path)
                 original_hash = baseline.get(path_norm, {}).get('hash', '')
                 timestamp = baseline.get(path_norm, {}).get('last_modified', timestamp)
             except Exception:
                 pass
-            
+
+            self.parent.file_fodler_deletion(_path, original_hash, is_file, self.logger, database_instance)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            self.logger.error(f"Deletion processing error: {str(e)}")
+        finally:
+            close_thread_local_fim_session()
+
+    def on_deleted(self, event):
+        try:
+            _path = event.src_path
+            is_file = not event.is_directory
+            dir_path = str(self._get_directory_path(_path))
+            file_path = str(_path)
+
             thread_pool.submit(
-                self.parent.file_folder_deletion,
-                _path, original_hash, is_file, self.logger, self.database_instance
+                self._process_deletion,
+                _path, is_file, dir_path, file_path
             )
         except Exception as e:
             self.logger.error(f"Deletion error: {str(e)}")
@@ -315,6 +355,7 @@ class MonitorChanges:
             for directory in self.current_directories:
                 if not os.path.exists(directory):
                     raise FileNotFoundError(f"Directory {directory} does not exist")
+
                 future = self.parent_thread_pool.submit(
                     self._initialize_directory_baseline,
                     directory, auth_username, db_session, database_instance
@@ -355,26 +396,41 @@ class MonitorChanges:
                 self.observer.stop()
                 self.observer.join()
                 print(f"Monitoring error: {e}")
-    
+
     def _initialize_directory_baseline(self, directory, auth_username, db_session, database_instance):
         """Initialize baseline for a directory (run in thread pool)."""
+        session = get_thread_local_fim_session()
         try:
-            self.backup_instance.create_backup(directory, auth_username)
-            baseline = self.fim_instance.tracking_directory(auth_username, directory, db_session)
+            thread_database_instance = DatabaseOperation(session)
 
-            if database_instance:
-                for path, data in baseline.items():
-                    database_instance.record_file_event(
+            self.backup_instance.create_backup(directory, auth_username)
+            baseline = self.fim_instance.tracking_directory(auth_username, directory, session)
+
+            baseline_copy = dict(baseline)
+            save_count = 0
+
+            for path, data in baseline_copy.items():
+                try:
+                    thread_database_instance.record_file_event(
                         directory_path=directory,
                         item_path=path,
-                        item_hash=data['hash'],
-                        item_type=data['type'],
-                        last_modified=data['last_modified'],
+                        item_hash=data.get('hash', ''),
+                        item_type=data.get('type', 'file'),
+                        last_modified=data.get('last_modified', datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
                         status='current'
                     )
-            print(f"Baseline initialized for {directory}")
+                    save_count += 1
+                except Exception as e:
+                    print(f"Warning: could not save {path}: {str(e)}")
+
+            session.commit()
+            print(f"Baseline initialized for {directory} ({save_count} items)")
         except Exception as e:
+            session.rollback()
             print(f"Failed to initialize baseline for {directory}: {str(e)}")
+            traceback.print_exc()
+        finally:
+            close_thread_local_fim_session()
 
     def _run_observer(self):
         """Run observer in a separate thread."""

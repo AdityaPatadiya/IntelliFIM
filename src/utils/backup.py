@@ -22,7 +22,6 @@ class BackupLogData:
 class Backup:
     def __init__(self):
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        print(f"current_dir: {current_dir}")
         self.backup_root = os.path.join(current_dir, "../../../FIM_Backup/backup")
         self.meta_file_path = os.path.join(current_dir, "../../../FIM_Backup/backup_metadata.json")  # where all the files hash and information will be stored.
         self.backup_log_path = os.path.join(current_dir, "../../../FIM_Backup/Backup_logs.json")  # where all the backup logs will be stored.
@@ -132,10 +131,7 @@ class Backup:
                     if current_hash is None:
                         continue
 
-                    print(f"Current hash: {current_hash}")
-
                     prev_hash = current_dir_metadata.get(rel_path, {}).get("hash")
-                    print(f"Previous hash: {prev_hash}")
 
                     if current_hash != prev_hash:
                         os.makedirs(os.path.dirname(dest_file), exist_ok=True)
