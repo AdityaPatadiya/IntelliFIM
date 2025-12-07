@@ -126,8 +126,8 @@ const FileIntegrity = () => {
 
       Object.entries(data.baseline).forEach(([directory, items]: [string, any]) => {
         Object.entries(items).forEach(([path, info]: [string, any]) => {
-          files.push({ 
-            path, 
+          files.push({
+            path,
             type: info.type || 'unknown',
             hash: info.hash || '',
             last_modified: info.last_modified || null,
@@ -307,7 +307,7 @@ const FileIntegrity = () => {
 
     // Apply search filter
     if (searchQuery.trim()) {
-      filtered = filtered.filter(file => 
+      filtered = filtered.filter(file =>
         file.path.toLowerCase().includes(searchQuery.toLowerCase()) ||
         file.hash.toLowerCase().includes(searchQuery.toLowerCase()) ||
         file.type.toLowerCase().includes(searchQuery.toLowerCase())
@@ -324,7 +324,7 @@ const FileIntegrity = () => {
         if (bValue === null) return sortOrder === 'asc' ? -1 : 1;
 
         if (sortField === 'type') {
-          return sortOrder === 'asc' 
+          return sortOrder === 'asc'
             ? aValue.localeCompare(bValue)
             : bValue.localeCompare(aValue);
         } else {
@@ -459,6 +459,72 @@ const FileIntegrity = () => {
           </AlertDescription>
         </Alert>
 
+        {/* File Changes Table */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Detected Changes ({fileChanges.length})</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {loading ? (
+              <div className="text-center py-8">Loading changes...</div>
+            ) : fileChanges.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                No changes detected. Start monitoring to track file integrity.
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>File Path</TableHead>
+                    <TableHead>Hash</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Last Modified</TableHead>
+                    <TableHead>Detected At</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {fileChanges.map((file, index) => (
+                    <TableRow key={index}>
+                      <TableCell className="font-mono text-sm">{file.path}</TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">
+                        {file.hash ? file.hash.substring(0, 12) + '...' : 'N/A'}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={getStatusColor(file.status)}>
+                          {file.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-sm">{file.last_modified || 'N/A'}</TableCell>
+                      <TableCell className="text-sm">{file.detected_at || 'N/A'}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => toast.info(`File: ${file.path}\nHash: ${file.hash}\nType: ${file.type}`)}
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          {file.status !== 'added' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleRestore(file.path)}
+                            >
+                              <Undo2 className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Watched Directories */}
         {fimStatus.watched_directories.length > 0 && (
           <Card>
@@ -514,9 +580,9 @@ const FileIntegrity = () => {
                     <TableRow>
                       <TableHead>File Path</TableHead>
                       <TableHead>
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => handleSort('type')}
                           className="h-8 px-2"
                         >
@@ -526,9 +592,9 @@ const FileIntegrity = () => {
                       </TableHead>
                       <TableHead>Hash</TableHead>
                       <TableHead>
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => handleSort('last_modified')}
                           className="h-8 px-2"
                         >
@@ -537,9 +603,9 @@ const FileIntegrity = () => {
                         </Button>
                       </TableHead>
                       <TableHead>
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => handleSort('detected_at')}
                           className="h-8 px-2"
                         >
@@ -674,72 +740,6 @@ const FileIntegrity = () => {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-
-        {/* File Changes Table */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Detected Changes ({fileChanges.length})</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <div className="text-center py-8">Loading changes...</div>
-            ) : fileChanges.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">
-                No changes detected. Start monitoring to track file integrity.
-              </div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>File Path</TableHead>
-                    <TableHead>Hash</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Last Modified</TableHead>
-                    <TableHead>Detected At</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {fileChanges.map((file, index) => (
-                    <TableRow key={index}>
-                      <TableCell className="font-mono text-sm">{file.path}</TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">
-                        {file.hash ? file.hash.substring(0, 12) + '...' : 'N/A'}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={getStatusColor(file.status)}>
-                          {file.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-sm">{file.last_modified || 'N/A'}</TableCell>
-                      <TableCell className="text-sm">{file.detected_at || 'N/A'}</TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => toast.info(`File: ${file.path}\nHash: ${file.hash}\nType: ${file.type}`)}
-                          >
-                            <Eye className="h-4 w-4" />
-                          </Button>
-                          {file.status !== 'added' && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleRestore(file.path)}
-                            >
-                              <Undo2 className="h-4 w-4" />
-                            </Button>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
       </div>
     </DashboardLayout>
   );
