@@ -42,7 +42,7 @@ class FIMEventHandler(FileSystemEventHandler):
         self.hash_cache = {}
         self.cache_timeout = 5.0  # Cache hash for 5 seconds
 
-    def _is_valid_evnet(self, event_path):
+    def _is_valid_event(self, event_path):
         """Check if this event should be processed."""
         if not self.is_active:
             return False
@@ -51,9 +51,9 @@ class FIMEventHandler(FileSystemEventHandler):
             return False
         
         for dir_path in self.parent.current_directories:
-            if event_path.starts_with(dir_path):
+            if event_path.startswith(dir_path):
                 return True
-            return False
+        return False
 
     def _get_directory_path(self, event_path):
         """Extract monitored directory path from event path"""
@@ -141,7 +141,7 @@ class FIMEventHandler(FileSystemEventHandler):
 
     def on_created(self, event):
         try:
-            if not self._is_valid_evnet(event.src_path):
+            if not self._is_valid_event(event.src_path):
                 return
             _path = event.src_path
             is_file = not event.is_directory
@@ -191,7 +191,7 @@ class FIMEventHandler(FileSystemEventHandler):
 
     def on_modified(self, event):
         try:
-            if not self._is_valid_evnet(event.src_path):
+            if not self._is_valid_event(event.src_path):
                 return
             _path = event.src_path
             is_file = not event.is_directory
@@ -237,7 +237,7 @@ class FIMEventHandler(FileSystemEventHandler):
             except Exception:
                 pass
 
-            self.parent.file_fodler_deletion(_path, original_hash, is_file, self.logger, database_instance)
+            self.parent.file_folder_deletion(_path, original_hash, is_file, self.logger, database_instance)
             session.commit()
         except Exception as e:
             session.rollback()
@@ -247,7 +247,7 @@ class FIMEventHandler(FileSystemEventHandler):
 
     def on_deleted(self, event):
         try:
-            if not self._is_valid_evnet(event.src_path):
+            if not self._is_valid_event(event.src_path):
                 return  
             _path = event.src_path
             is_file = not event.is_directory
@@ -267,7 +267,8 @@ class MonitorChanges:
         self.logs_dir = Path(__file__).resolve().parent.parent / "../logs"
         self.logs_dir.mkdir(exist_ok=True, parents=True)
 
-        self.reset_state()
+        self._stop_flag = threading.Event()
+        self.observer_thread = None
 
         # Core Components
         self.observer = None
@@ -275,6 +276,8 @@ class MonitorChanges:
         self.fim_instance = FIM_monitor()
         self.configure_logger = configure_logger()
         self.parent_thread_pool = thread_pool
+
+        self.reset_state()
 
     def reset_state(self):
         """Reset all state variable"""
@@ -288,6 +291,9 @@ class MonitorChanges:
         self.current_logger = None
         self.auth_username = None
         self.db_session = None
+
+        if hasattr(self, '_stop_flag'):
+            self._stop_flag.clear()
 
     def file_folder_addition(self, _path, current_hash, is_file, logger, database_instance):
         change_type = "File" if is_file else "Folder"
@@ -367,7 +373,7 @@ class MonitorChanges:
     def monitor_changes(self, auth_username, directories, excluded_files, db_session):
         """Monitor specified directories for changes using Watchdog."""
         try:
-            self._stop_observer()
+            self.stop_monitoring()
             self.reset_state()
 
             self.auth_username = auth_username
@@ -410,23 +416,26 @@ class MonitorChanges:
             self.observer.start()
             print(f"FIM monitoring started for {len(self.current_directories)} directories")
 
-            observer_thread = threading.Thread(
+            self.observer_thread = threading.Thread(
                 target=self._run_observer,
                 daemon=True,
                 name=f"FIM-Observer-{auth_username}"
             )
-            observer_thread.start()
+            self.observer_thread.start()
 
         except Exception as e:
             if self.current_logger:
                 self.current_logger.error(f"Monitoring error: {e}")
             else:
-                self._stop_observer()
+                self.stop_monitoring()
                 print(f"Monitoring error: {e}")
 
-    def _stop_observer(self):
-        """Safely stop the observer if it exists"""
-        if hasattr(self, "observer") and self.observer:
+    def stop_monitoring(self):
+        """Stop monitoring completely."""
+        self._stop_flag.set()  # Signal thread to stop
+        
+        # Stop observer if exists
+        if hasattr(self, 'observer') and self.observer:
             try:
                 if self.observer.is_alive():
                     self.observer.stop()
@@ -435,6 +444,17 @@ class MonitorChanges:
                 print(f"Error stopping observer: {e}")
             finally:
                 self.observer = None
+        
+        # Wait for observer thread to finish
+        if self.observer_thread and self.observer_thread.is_alive():
+            try:
+                self.observer_thread.join(timeout=3)
+            except Exception:
+                pass
+        
+        # Save any pending changes
+        if hasattr(self, 'db_session') and self.db_session:
+            self._save_reported_changes(self.db_session)
 
     def _initialize_directory_baseline(self, directory, auth_username, db_session, database_instance):
         """Initialize baseline for a directory (run in thread pool)."""
@@ -474,18 +494,19 @@ class MonitorChanges:
     def _run_observer(self):
         """Run observer in a separate thread."""
         try:
-            while self.observer.is_alive():
+            while not self._stop_flag.is_set() and self.observer and self.observer.is_alive():
                 time.sleep(1)
+
         except KeyboardInterrupt:
             print("\nShutting down FIM monitor...")
-            self.observer.stop()
-            self.observer.join()
+        except Exception as e:
+            print(f"Observer thread error: {str(e)}")
+        finally:
             self._cleanup()
-            print("FIM monitor shutdown complete.")
 
     def _cleanup(self):
         """Cleanup resources."""
-        self._stop_observer()
+        self.stop_monitoring()
         if hasattr(self, 'db_session') and self.db_session:
             self._save_reported_changes(self.db_session)
 

@@ -138,7 +138,7 @@ def stop_fim_monitoring(
 
         # Stop the observer if it's running
         if (hasattr(fim_monitor, "current_directories") and len(fim_monitor.current_directories) == 0):
-            fim_monitor._stop_observer()
+            fim_monitor.stop_monitoring()
 
         return {
             "message": "FIM monitoring stopped successfully",
