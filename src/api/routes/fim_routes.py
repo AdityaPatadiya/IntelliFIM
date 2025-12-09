@@ -73,6 +73,16 @@ def start_fim_monitoring(
                     detail=f"Directory does not exist: {directory}"
                 )
 
+        active_dirs = []
+        if hasattr(fim_monitor, "observer") and fim_monitor.observer and fim_monitor.observer.is_alive():
+            active_dirs = fim_monitor.current_directories.copy()
+            overlapping = set(request.directories) & set(active_dirs)
+            if overlapping:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Direcetories already being monitored: {list(overlapping)}"
+                )
+
         for directory in request.directories:
             existing_dir = fim_db.query(Directory).filter(Directory.path == directory).first()
             if not existing_dir:
@@ -92,9 +102,12 @@ def start_fim_monitoring(
         return {
             "message": "FIM monitoring started successfully",
             "directories": request.directories,
-            "excluded_files": request.excluded_files or []
+            "excluded_files": request.excluded_files or [],
+            "already_active_directories": active_dirs,
         }
-
+    
+    except HTTPException:
+        raise
     except Exception as e:
         fim_db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to start monitoring: {str(e)}")
@@ -108,17 +121,29 @@ def stop_fim_monitoring(
     Stop monitoring specified directories.
     """
     try:
-        # Stop the observer if it's running
-        if hasattr(fim_monitor, 'observer') and fim_monitor.observer.is_alive():
-            fim_monitor.observer.stop()
-            fim_monitor.observer.join()
+        stopped_dirs = []
+        error_dirs = []
 
-            if hasattr(fim_monitor, 'db_session') and fim_monitor.db_session:
-                fim_monitor._save_reported_changes(fim_monitor.db_session)
+        for directory in request.directories:
+            try:
+                if (hasattr(fim_monitor, "current_directories") and directory in fim_monitor.current_directories):
+                    fim_monitor.current_directories.remove(directory)
+                    if hasattr(fim_monitor, "db_session") and fim_monitor.db_session:
+                        fim_monitor._save_reported_changes(fim_monitor.db_session)
+                    stopped_dirs.append(directory)
+                else:
+                    error_dirs.append(f"{directory} (not monitored)")
+            except Exception as e:
+                error_dirs.append(f"{directory} (error: {str(e)})")
+
+        # Stop the observer if it's running
+        if (hasattr(fim_monitor, "current_directories") and len(fim_monitor.current_directories) == 0):
+            fim_monitor._stop_observer()
 
         return {
             "message": "FIM monitoring stopped successfully",
-            "stopped_directories": request.directories
+            "stopped_directories": stopped_dirs,
+            "errors": error_dirs if error_dirs else None
         }
 
     except Exception as e:
@@ -138,7 +163,7 @@ async def stream_fim_events():
     return EventSourceResponse(event_generator())
 
 @router.get("/status", response_model=FIMStatusResponse, summary="Get monitoring status")
-def get_fim_status(
+def get_fim_status(  # just fetch the all the watched directories from the 'directories' table in 'fim_db
     fim_db: Session = Depends(get_fim_db)
 ):
     """
@@ -146,17 +171,24 @@ def get_fim_status(
     """
     try:
         is_monitoring = (
-            hasattr(fim_monitor, 'observer') and 
+            hasattr(fim_monitor, 'observer') and
+            fim_monitor.observer is not None and
             fim_monitor.observer.is_alive()
         )
 
         dir_records = fim_db.query(Directory).all()
-        watched_directories = [str(d.path) for d in dir_records]
+        all_directories = [str(d.path) for d in dir_records]
+
+        active_directories = []
+        if hasattr(fim_monitor, "current_directories"):
+            active_directories = fim_monitor.current_directories
 
         return FIMStatusResponse(
             is_monitoring=is_monitoring,
-            watched_directories=watched_directories,
-            total_watched=len(watched_directories)
+            watched_directories=all_directories,
+            active_directories=active_directories,
+            total_configured=len(all_directories),
+            total_active=len(active_directories)
         )
 
     except Exception as e:

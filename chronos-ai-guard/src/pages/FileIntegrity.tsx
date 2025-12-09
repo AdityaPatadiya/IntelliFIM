@@ -72,6 +72,8 @@ const FileIntegrity = () => {
       if (!response.ok) throw new Error('Failed to fetch status');
       const data = await response.json();
       setFimStatus(data);
+      // console.log("Status endpoint response: ", response)
+      // console.log("Status endpoint data: ", data)
     } catch (error) {
       console.error('Error fetching FIM status:', error);
     }
@@ -170,6 +172,8 @@ const FileIntegrity = () => {
       setIsStartDialogOpen(false);
       setStartDirectories('');
       fetchStatus();
+      console.log("/start endpoint response:", response)
+      console.log("/start endpoint data:", data)
     } catch (error: any) {
       toast.error(error.message || 'Failed to start monitoring');
     }

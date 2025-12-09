@@ -17,7 +17,9 @@ class FIMRestoreRequest(BaseModel):
 class FIMStatusResponse(BaseModel):
     is_monitoring: bool
     watched_directories: List[str]
-    total_watched: int
+    active_directories: List[str]
+    total_configured: int
+    total_active: int
 
 class FIMChangesResponse(BaseModel):
     added: Dict[str, Any]

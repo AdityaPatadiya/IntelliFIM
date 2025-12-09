@@ -36,10 +36,24 @@ class FIMEventHandler(FileSystemEventHandler):
         self.main_db_session = db_session
         self.auth_username = auth_username
         self.backup_instance = Backup()
+        self.is_active = True
 
         # Cache for hashing results to avoid recomputing
         self.hash_cache = {}
         self.cache_timeout = 5.0  # Cache hash for 5 seconds
+
+    def _is_valid_evnet(self, event_path):
+        """Check if this event should be processed."""
+        if not self.is_active:
+            return False
+
+        if not hasattr(self.parent, "current_directories"):
+            return False
+        
+        for dir_path in self.parent.current_directories:
+            if event_path.starts_with(dir_path):
+                return True
+            return False
 
     def _get_directory_path(self, event_path):
         """Extract monitored directory path from event path"""
@@ -127,6 +141,8 @@ class FIMEventHandler(FileSystemEventHandler):
 
     def on_created(self, event):
         try:
+            if not self._is_valid_evnet(event.src_path):
+                return
             _path = event.src_path
             is_file = not event.is_directory
 
@@ -175,6 +191,8 @@ class FIMEventHandler(FileSystemEventHandler):
 
     def on_modified(self, event):
         try:
+            if not self._is_valid_evnet(event.src_path):
+                return
             _path = event.src_path
             is_file = not event.is_directory
 
@@ -229,6 +247,8 @@ class FIMEventHandler(FileSystemEventHandler):
 
     def on_deleted(self, event):
         try:
+            if not self._is_valid_evnet(event.src_path):
+                return  
             _path = event.src_path
             is_file = not event.is_directory
             dir_path = str(self._get_directory_path(_path))
@@ -247,7 +267,17 @@ class MonitorChanges:
         self.logs_dir = Path(__file__).resolve().parent.parent / "../logs"
         self.logs_dir.mkdir(exist_ok=True, parents=True)
 
-        # Persistent state
+        self.reset_state()
+
+        # Core Components
+        self.observer = None
+        self.backup_instance = Backup()
+        self.fim_instance = FIM_monitor()
+        self.configure_logger = configure_logger()
+        self.parent_thread_pool = thread_pool
+
+    def reset_state(self):
+        """Reset all state variable"""
         self.reported_changes = {
             "added": {},
             "modified": {},
@@ -258,14 +288,6 @@ class MonitorChanges:
         self.current_logger = None
         self.auth_username = None
         self.db_session = None
-
-        # Core Components
-        self.observer = Observer()
-        self.backup_instance = Backup()
-        self.fim_instance = FIM_monitor()
-        self.configure_logger = configure_logger()
-
-        self.parent_thread_pool = thread_pool
 
     def file_folder_addition(self, _path, current_hash, is_file, logger, database_instance):
         change_type = "File" if is_file else "Folder"
@@ -345,9 +367,14 @@ class MonitorChanges:
     def monitor_changes(self, auth_username, directories, excluded_files, db_session):
         """Monitor specified directories for changes using Watchdog."""
         try:
+            self._stop_observer()
+            self.reset_state()
+
             self.auth_username = auth_username
             self.current_directories = directories
             self.db_session = db_session
+
+            self.observer = Observer()
             database_instance = DatabaseOperation(db_session) if db_session else None
 
             # initialize baselines in thread pool
@@ -385,7 +412,8 @@ class MonitorChanges:
 
             observer_thread = threading.Thread(
                 target=self._run_observer,
-                daemon=True
+                daemon=True,
+                name=f"FIM-Observer-{auth_username}"
             )
             observer_thread.start()
 
@@ -393,9 +421,20 @@ class MonitorChanges:
             if self.current_logger:
                 self.current_logger.error(f"Monitoring error: {e}")
             else:
-                self.observer.stop()
-                self.observer.join()
+                self._stop_observer()
                 print(f"Monitoring error: {e}")
+
+    def _stop_observer(self):
+        """Safely stop the observer if it exists"""
+        if hasattr(self, "observer") and self.observer:
+            try:
+                if self.observer.is_alive():
+                    self.observer.stop()
+                    self.observer.join(timeout=5)
+            except Exception as e:
+                print(f"Error stopping observer: {e}")
+            finally:
+                self.observer = None
 
     def _initialize_directory_baseline(self, directory, auth_username, db_session, database_instance):
         """Initialize baseline for a directory (run in thread pool)."""
@@ -446,6 +485,7 @@ class MonitorChanges:
 
     def _cleanup(self):
         """Cleanup resources."""
+        self._stop_observer()
         if hasattr(self, 'db_session') and self.db_session:
             self._save_reported_changes(self.db_session)
 

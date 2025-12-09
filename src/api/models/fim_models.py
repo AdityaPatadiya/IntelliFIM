@@ -27,6 +27,6 @@ class FileMetadata(FimBase):
     hash = Column(String(128), nullable=False)
     last_modified = Column(DateTime, nullable=False)
     status = Column(String(50), nullable=False)
-    detected_at = Column(DateTime, default=datetime.utcnow)
-    
+    detected_at = Column(DateTime, default=datetime.now)
+
     directory = relationship("Directory", back_populates="files")
