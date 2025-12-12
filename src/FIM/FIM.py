@@ -514,11 +514,48 @@ class MonitorChanges:
         database_instance = DatabaseOperation(db_session)
         for change_type, changes in self.reported_changes.items():
             for path, data in changes.items():
-                directory = os.path.dirname(path)
+                # Resolve the monitored root directory that contains this path
+                monitored_root = None
+                try:
+                    abs_path = os.path.abspath(path)
+                except Exception:
+                    abs_path = path
+
+                # Normalize both sides before comparison
+                for root in self.current_directories:
+                    try:
+                        root_abs = os.path.abspath(root)
+                    except Exception:
+                        root_abs = root
+
+                    # Ensure trailing sep won't break startswith comparisons
+                    if not root_abs.endswith(os.sep):
+                        root_abs_cmp = root_abs + os.sep
+                    else:
+                        root_abs_cmp = root_abs
+
+                    if not abs_path.endswith(os.sep):
+                        abs_path_cmp = abs_path + os.sep
+                    else:
+                        abs_path_cmp = abs_path
+
+                    if abs_path_cmp.startswith(root_abs_cmp) or abs_path == root_abs:
+                        monitored_root = root_abs
+                        break
+
+                # fallback to dirname (should rarely happen)
+                if not monitored_root:
+                    monitored_root = os.path.dirname(path)
+
                 try:
                     item_type = "file" if os.path.isfile(path) else "folder"
+                except Exception:
+                    # If filesystem state can't be read (deleted), rely on recorded change type
+                    item_type = "file" if change_type == "added" or change_type == "modified" else "folder"
+
+                try:
                     database_instance.record_file_event(
-                        directory_path=directory,
+                        directory_path=monitored_root,
                         item_path=path,
                         item_hash=data.get('hash', ''),
                         item_type=item_type,
@@ -527,6 +564,7 @@ class MonitorChanges:
                     )
                 except Exception as e:
                     print(f"Error saving change for {path}: {str(e)}")
+
 
     def view_baseline(self, db_session=None):
         """View ALL baselines with datetime serialization support"""

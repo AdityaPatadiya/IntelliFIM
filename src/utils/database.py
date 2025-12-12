@@ -1,7 +1,8 @@
+import os
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime
-from typing import Dict, List, Tuple, cast
+from typing import Dict, List, Tuple, cast, Optional
 
 from src.api.database.connection import FimSessionLocal
 from src.api.models.fim_models import Directory, FileMetadata
@@ -10,8 +11,10 @@ from src.api.models.fim_models import Directory, FileMetadata
 class DatabaseOperation:
     """Handles all database interactions using SQLAlchemy ORM."""
 
-    def __init__(self, db:Session):
-        self.db:Session = db
+    def __init__(self, db: Session, monitored_roots: Optional[List[str]] = None):
+        self.db: Session = db
+        # list of monitored root directories; if not provided, default to empty list
+        self.monitored_roots: List[str] = monitored_roots or []
 
     def _commit(self):
         """Commit the transaction safely."""
@@ -68,7 +71,28 @@ class DatabaseOperation:
     ):
         """Insert or update a file event."""
         try:
+            # Normalize directory path
+            directory_path = os.path.abspath(directory_path)
+
+            # Prevent creation of subdirectories in the Directory table
+            if hasattr(self, "monitored_roots"):
+                allowed = [os.path.abspath(p) for p in self.monitored_roots]
+
+                # If the directory_path is NOT one of the monitored roots → reject
+                if directory_path not in allowed:
+                    for root in allowed:
+                        if item_path.startswith(root):
+                            directory_path = root
+                            break
+                    else:
+                        # If no root matches (rare), fallback but do NOT create DB entry
+                        print(f"[WARNING] Attempted to record event for non-monitored directory: {directory_path}")
+                        return  # Skip creating directory entry entirely
+
+            # Now safe to create or get directory
             dir_id = self.get_or_create_directory(directory_path)
+
+            # Fetch file entry
             file_entry = (
                 self.db.query(FileMetadata)
                 .filter_by(directory_id=dir_id, item_path=item_path)
@@ -76,17 +100,17 @@ class DatabaseOperation:
             )
 
             if file_entry:
-                file_entry.hash = item_hash  # type: ignore[assignment]
-                file_entry.last_modified = last_modified  # type:ignore[assignment]
-                file_entry.status = status  # type: ignore[assignment]
+                file_entry.hash = item_hash  # type: ignore
+                file_entry.last_modified = last_modified  # type: ignore
+                file_entry.status = status  # type: ignore
             else:
                 new_entry = FileMetadata(
                     directory_id=dir_id,
                     item_path=item_path,
                     item_type=item_type,
-                    hash=item_hash,  # type: ignore[arg-type]
+                    hash=item_hash,
                     last_modified=last_modified,
-                    status=status  # type: ignore[arg-type]
+                    status=status
                 )
                 self.db.add(new_entry)
 

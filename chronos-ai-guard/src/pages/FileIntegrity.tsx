@@ -272,21 +272,129 @@ const FileIntegrity = () => {
     }
   };
 
+  const setupEventStream = () => {
+    const eventSource = new EventSource(`${API_URL}/api/fim/stream`);
+
+    eventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      toast.info(`File ${data.type}: ${data.path}`);
+      // Refresh changes immediately
+      fetchChanges();
+    };
+
+    eventSource.onerror = (error) => {
+      console.error('EventSource failed:', error);
+      eventSource.close();
+      // Reconnect after 5 seconds
+      setTimeout(setupEventStream, 5000);
+    };
+
+    return eventSource;
+  };
+
   useEffect(() => {
+    // Initial fetch on component
     fetchStatus();
     fetchChanges();
     fetchBaseline();
 
-    // Poll for changes every 30 seconds
-    const interval = setInterval(() => {
+    let eventSource: EventSource | null = null;
+    let reconnectTimeout: NodeJS.Timeout;
+
+    // Function to set up SSE connection
+    const setupEventSource = () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+
+      try {
+        // Create EventSource connection to SSE endpoint
+        eventSource = new EventSource(`${API_URL}/api/fim/stream`, {
+          withCredentials: true,
+        });
+
+        eventSource.onopen = () => {
+          console.log('FIM EventSource connection opened');
+        };
+
+        eventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            console.log('FIM Event received:', data);
+
+            // Refresh changes when we receive an event
+            fetchChanges();
+
+            // Optional: Show toast notification
+            toast.info(`File ${data.type}: ${data.path}`, {
+              duration: 3000,
+            });
+          } catch (error) {
+            console.error('Error parsing SSE event:', error);
+          }
+        };
+
+        eventSource.onerror = (error) => {
+          console.error('EventSource error:', error);
+
+          // Close and attempt to reconnect
+          if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+          }
+
+          // Attempt reconnect after 5 seconds if monitoring is active
+          if (fimStatus.is_monitoring) {
+            reconnectTimeout = setTimeout(() => {
+              setupEventSource();
+            }, 5000);
+          }
+        };
+      } catch (error) {
+        console.error('Failed to create EventSource:', error);
+      }
+    };
+
+    // Set up SSE connection if monitoring is active
+    if (fimStatus.is_monitoring) {
+      setupEventSource();
+    }
+
+    // Set up polling interval for status and baseline
+    const statusInterval = setInterval(() => {
+      fetchStatus();
+      fetchBaseline();
+
+      // Also fetch changes via polling as fallback (every 60 seconds)
+    }, 60000);
+
+    // Set up polling for changes as fallback (every 30 seconds)
+    const changesInterval = setInterval(() => {
       if (fimStatus.is_monitoring) {
         fetchChanges();
-        fetchBaseline();
       }
     }, 30000);
 
-    return () => clearInterval(interval);
-  }, [fimStatus.is_monitoring]);
+    // Cleanup function
+    return () => {
+      console.log('Cleaning up FIM intervals and EventSource');
+
+      // Clear intervals
+      clearInterval(statusInterval);
+      clearInterval(changesInterval);
+
+      // Clear reconnect timeout
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+      }
+
+      // Close EventSource connection
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+    };
+  }, [fimStatus.is_monitoring]); // Re-run effect when monitoring status changes
 
   const getStatusColor = (status: string) => {
     switch (status) {

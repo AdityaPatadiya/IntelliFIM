@@ -12,6 +12,7 @@ from src.api.database.connection import FimBase
 
 class Directory(FimBase):
     __tablename__ = "directories"
+    # manually added the parameter to sqlalchemy
     id = Column(Integer, primary_key=True, index=True)
     path = Column(String(500), unique=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
