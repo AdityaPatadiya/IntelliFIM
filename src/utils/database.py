@@ -71,28 +71,22 @@ class DatabaseOperation:
     ):
         """Insert or update a file event."""
         try:
-            # Normalize directory path
             directory_path = os.path.abspath(directory_path)
-
             # Prevent creation of subdirectories in the Directory table
             if hasattr(self, "monitored_roots"):
                 allowed = [os.path.abspath(p) for p in self.monitored_roots]
 
-                # If the directory_path is NOT one of the monitored roots → reject
                 if directory_path not in allowed:
                     for root in allowed:
                         if item_path.startswith(root):
                             directory_path = root
                             break
                     else:
-                        # If no root matches (rare), fallback but do NOT create DB entry
                         print(f"[WARNING] Attempted to record event for non-monitored directory: {directory_path}")
-                        return  # Skip creating directory entry entirely
+                        return
 
-            # Now safe to create or get directory
             dir_id = self.get_or_create_directory(directory_path)
 
-            # Fetch file entry
             file_entry = (
                 self.db.query(FileMetadata)
                 .filter_by(directory_id=dir_id, item_path=item_path)

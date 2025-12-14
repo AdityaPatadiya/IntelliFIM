@@ -131,6 +131,7 @@ class FIMEventHandler(FileSystemEventHandler):
         session = get_thread_local_fim_session()
         try:
             database_instance = DatabaseOperation(session)
+            database_instance.monitored_roots = self.parent.current_directories
             self.parent.file_folder_addition(_path, current_hash, is_file, self.logger, database_instance)
             session.commit()
         except Exception as e:
@@ -173,6 +174,7 @@ class FIMEventHandler(FileSystemEventHandler):
         session = get_thread_local_fim_session()
         try:
             database_instance = DatabaseOperation(session)
+            database_instance.monitored_roots = self.parent.current_directories
 
             original_hash = ""
             try:
@@ -226,6 +228,7 @@ class FIMEventHandler(FileSystemEventHandler):
         session = get_thread_local_fim_session()
         try:
             database_instance = DatabaseOperation(session)
+            database_instance.monitored_roots = self.parent.current_directories
 
             original_hash = ""
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -461,6 +464,7 @@ class MonitorChanges:
         session = get_thread_local_fim_session()
         try:
             thread_database_instance = DatabaseOperation(session)
+            thread_database_instance.monitored_roots = self.current_directories
 
             self.backup_instance.create_backup(directory, auth_username)
             baseline = self.fim_instance.tracking_directory(auth_username, directory, session)
@@ -512,6 +516,7 @@ class MonitorChanges:
 
     def _save_reported_changes(self, db_session):
         database_instance = DatabaseOperation(db_session)
+        database_instance.monitored_roots = self.current_directories
         for change_type, changes in self.reported_changes.items():
             for path, data in changes.items():
                 # Resolve the monitored root directory that contains this path
