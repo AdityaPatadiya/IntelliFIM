@@ -20,6 +20,13 @@ from src.utils.database_manager import get_thread_local_fim_session, close_threa
 
 
 async def push_event(change_type, file_path, details):
+    # Ensure details is a dictionary with serializable values
+    if isinstance(details, dict):
+        # Convert any datetime objects to strings
+        for key, value in details.items():
+            if hasattr(value, 'isoformat'):
+                details[key] = value.isoformat()
+
     await event_queue.put({
         "type": change_type,
         "path": file_path,

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { DashboardLayout } from '@/components/DashboardLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,9 +8,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { Plus, RefreshCw, Undo2, Eye, Play, Square, Shield, ArrowUpDown, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, RefreshCw, Undo2, Eye, Play, Square, Shield, ArrowUpDown, Search, ChevronLeft, ChevronRight, Trash2, Clock, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Separator } from '@/components/ui/separator';
+import { Switch } from '@/components/ui/switch';
+import { ScrollArea } from '@/components/ui/scroll-area';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -21,6 +24,17 @@ interface FileChange {
   type: string;
   detected_at: string | null;
   status: 'added' | 'modified' | 'deleted';
+}
+
+interface RealTimeEvent {
+  type: 'added' | 'modified' | 'deleted';
+  path: string;
+  details: {
+    hash?: string;
+    timestamp: string;
+  };
+  receivedAt: string;
+  id: string;
 }
 
 interface FIMStatus {
@@ -40,6 +54,7 @@ interface BaselineFile {
 const FileIntegrity = () => {
   const { user } = useAuth();
   const [fileChanges, setFileChanges] = useState<FileChange[]>([]);
+  const [realTimeEvents, setRealTimeEvents] = useState<RealTimeEvent[]>([]);
   const [fimStatus, setFimStatus] = useState<FIMStatus>({ is_monitoring: false, watched_directories: [], total_watched: 0 });
   const [loading, setLoading] = useState(false);
   const [newDirectory, setNewDirectory] = useState('');
@@ -53,9 +68,13 @@ const FileIntegrity = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedFile, setSelectedFile] = useState<BaselineFile | null>(null);
+  const [autoScrollRealTime, setAutoScrollRealTime] = useState(true);
+  const [realTimeLimit, setRealTimeLimit] = useState(50);
   const itemsPerPage = 10;
+  const eventsEndRef = useRef<HTMLDivElement>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
-  const getAuthHeaders = () => {  // used for authenticated API requests
+  const getAuthHeaders = () => {
     const token = localStorage.getItem('access_token');
     return {
       'Content-Type': 'application/json',
@@ -63,6 +82,14 @@ const FileIntegrity = () => {
     };
   };
 
+  const eventCounterRef = useRef(0);
+  // Generate unique ID for real-time events
+  const generateEventId = () => {
+    eventCounterRef.current += 1;
+    return `${Date.now()}_${eventCounterRef.current}`;
+  };
+
+  // Fetch status
   const fetchStatus = async () => {
     try {
       const response = await fetch(`${API_URL}/api/fim/status`, {
@@ -72,13 +99,12 @@ const FileIntegrity = () => {
       if (!response.ok) throw new Error('Failed to fetch status');
       const data = await response.json();
       setFimStatus(data);
-      // console.log("Status endpoint response: ", response)
-      // console.log("Status endpoint data: ", data)
     } catch (error) {
       console.error('Error fetching FIM status:', error);
     }
   };
 
+  // Fetch changes from database
   const fetchChanges = async () => {
     try {
       setLoading(true);
@@ -113,6 +139,7 @@ const FileIntegrity = () => {
     }
   };
 
+  // Fetch baseline
   const fetchBaseline = async () => {
     try {
       setLoadingBaseline(true);
@@ -147,6 +174,117 @@ const FileIntegrity = () => {
     }
   };
 
+  // Setup EventSource for real-time events
+  const setupEventSource = () => {
+    // Close existing connection if any
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+
+    try {
+      const eventSource = new EventSource(`${API_URL}/api/fim/stream`, {
+        withCredentials: true,
+      });
+
+      eventSource.onopen = () => {
+        console.log('FIM EventSource connection opened');
+        toast.success('Real-time monitoring connected');
+      };
+
+      eventSource.onmessage = (event) => {
+        try {
+          console.log('Raw SSE event data:', event.data);
+
+          // Handle the SSE format: "data: {json}\n\n"
+          let dataString = event.data;
+
+          if (dataString.startsWith('data: ')) {
+            dataString = dataString.substring(6);
+            dataString = dataString.trim();
+
+            const data = JSON.parse(dataString);
+            console.log('Parsed SSE event:', data);
+
+            const newEvent: RealTimeEvent = {
+              type: data.type,
+              path: data.path,
+              details: data.details || {},
+              receivedAt: new Date().toISOString(),
+              id: generateEventId()
+            };
+
+            setRealTimeEvents(prev => {
+              const updated = [newEvent, ...prev];
+              return updated.slice(0, realTimeLimit);
+            });
+
+            const eventType = data.type.charAt(0).toUpperCase() + data.type.slice(1);
+            toast.info(`${eventType}: ${data.path}`, {
+              duration: 3000,
+              icon: <AlertCircle className="h-4 w-4" />,
+            });
+
+          } else {
+            console.warn('Unexpected SSE format:', dataString);
+          }
+
+        } catch (error) {
+          console.error('Error parsing SSE event:', error, 'Raw data:', event.data);
+          try {
+            const data = JSON.parse(event.data.trim());
+            console.log('Parsed as raw JSON:', data);
+
+            const newEvent: RealTimeEvent = {
+              type: data.type,
+              path: data.path,
+              details: data.details || {},
+              receivedAt: new Date().toISOString(),
+              id: generateEventId()
+            };
+
+            setRealTimeEvents(prev => [newEvent, ...prev.slice(0, realTimeLimit - 1)]);
+          } catch (e) {
+            console.error('Failed to parse as raw JSON:', e);
+          }
+        }
+      };
+
+      eventSource.onerror = (error) => {
+        console.error('EventSource error:', error);
+
+        if (eventSource.readyState === EventSource.CLOSED) {
+          toast.error('Real-time connection closed');
+        } else if (eventSource.readyState === EventSource.CONNECTING) {
+          console.log('EventSource reconnecting...');
+        }
+
+        // Attempt reconnect after 3 seconds if monitoring is active
+        if (fimStatus.is_monitoring) {
+          setTimeout(() => {
+            if (fimStatus.is_monitoring && (!eventSourceRef.current || eventSourceRef.current.readyState === EventSource.CLOSED)) {
+              console.log('Attempting to reconnect EventSource...');
+              setupEventSource();
+            }
+          }, 3000);
+        }
+      };
+
+      eventSourceRef.current = eventSource;
+
+    } catch (error) {
+      console.error('Failed to create EventSource:', error);
+    }
+  };
+
+  // Clear real-time events
+  const clearRealTimeEvents = () => {
+    setRealTimeEvents([]);
+    eventCounterRef.current = 0;
+    toast.success('Real-time events cleared');
+  };
+
+  // Handle start monitoring
   const handleStartMonitoring = async () => {
     if (!startDirectories.trim()) {
       toast.error('Please enter at least one directory');
@@ -171,14 +309,73 @@ const FileIntegrity = () => {
       toast.success(data.message);
       setIsStartDialogOpen(false);
       setStartDirectories('');
-      fetchStatus();
-      console.log("/start endpoint response:", response)
-      console.log("/start endpoint data:", data)
+
+      // Clear previous real-time events
+      clearRealTimeEvents();
+
+      // Fetch status and setup event source
+      await fetchStatus();
+      if (fimStatus.is_monitoring) {
+        setupEventSource();
+      }
     } catch (error: any) {
       toast.error(error.message || 'Failed to start monitoring');
     }
   };
 
+  const testSSEConnection = async () => {
+    try {
+      console.log('Testing SSE connection...');
+      const response = await fetch(`${API_URL}/api/fim/stream`, {
+        headers: getAuthHeaders(),
+      });
+
+      if (!response.ok) {
+        console.error('SSE test failed with status:', response.status);
+        return;
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        console.error('No reader available');
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      console.log('SSE test connected, waiting for events...');
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          console.log('SSE test stream ended');
+          break;
+        }
+
+        const chunk = decoder.decode(value);
+        console.log('SSE raw chunk:', chunk);
+
+        // Parse each line
+        const lines = chunk.split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('data: ')) {
+            const jsonStr = trimmed.substring(6);
+            console.log('SSE data line:', jsonStr);
+            try {
+              const data = JSON.parse(jsonStr);
+              console.log('Parsed SSE data:', data);
+            } catch (e) {
+              console.error('Failed to parse JSON:', e, 'String:', jsonStr);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('SSE test error:', error);
+    }
+  };
+
+  // Handle stop monitoring
   const handleStopMonitoring = async () => {
     try {
       const response = await fetch(`${API_URL}/api/fim/stop`, {
@@ -191,12 +388,20 @@ const FileIntegrity = () => {
 
       const data = await response.json();
       toast.success(data.message);
+
+      // Close EventSource connection
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+
       fetchStatus();
     } catch (error) {
       toast.error('Failed to stop monitoring');
     }
   };
 
+  // Handle add directory
   const handleAddDirectory = async () => {
     if (!newDirectory.trim()) {
       toast.error('Please enter a directory path');
@@ -225,6 +430,7 @@ const FileIntegrity = () => {
     }
   };
 
+  // Handle rebuild baseline
   const handleRebuildBaseline = async () => {
     if (fimStatus.watched_directories.length === 0) {
       toast.error('No directories are being monitored');
@@ -251,6 +457,7 @@ const FileIntegrity = () => {
     }
   };
 
+  // Handle restore
   const handleRestore = async (path: string) => {
     try {
       const response = await fetch(`${API_URL}/api/fim/restore`, {
@@ -272,103 +479,47 @@ const FileIntegrity = () => {
     }
   };
 
-  const setupEventStream = () => {
-    const eventSource = new EventSource(`${API_URL}/api/fim/stream`);
-
-    eventSource.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      toast.info(`File ${data.type}: ${data.path}`);
-      // Refresh changes immediately
-      fetchChanges();
-    };
-
-    eventSource.onerror = (error) => {
-      console.error('EventSource failed:', error);
-      eventSource.close();
-      // Reconnect after 5 seconds
-      setTimeout(setupEventStream, 5000);
-    };
-
-    return eventSource;
+  // Format timestamp
+  const formatTime = (timestamp: string) => {
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      // hour12: true
+    });
   };
 
+  // Get status color
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'added': return 'default';
+      case 'modified': return 'secondary';
+      case 'deleted': return 'destructive';
+      default: return 'default';
+    }
+  };
+
+  // Auto-scroll to bottom of real-time events
   useEffect(() => {
-    // Initial fetch on component
+    if (autoScrollRealTime && eventsEndRef.current) {
+      eventsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [realTimeEvents, autoScrollRealTime]);
+
+  // Setup and cleanup
+  useEffect(() => {
+    // Initial fetch
     fetchStatus();
     fetchChanges();
     fetchBaseline();
 
-    let eventSource: EventSource | null = null;
-    let reconnectTimeout: NodeJS.Timeout;
-
-    // Function to set up SSE connection
-    const setupEventSource = () => {
-      if (eventSource) {
-        eventSource.close();
-      }
-
-      try {
-        // Create EventSource connection to SSE endpoint
-        eventSource = new EventSource(`${API_URL}/api/fim/stream`, {
-          withCredentials: true,
-        });
-
-        eventSource.onopen = () => {
-          console.log('FIM EventSource connection opened');
-        };
-
-        eventSource.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            console.log('FIM Event received:', data);
-
-            // Refresh changes when we receive an event
-            fetchChanges();
-
-            // Optional: Show toast notification
-            toast.info(`File ${data.type}: ${data.path}`, {
-              duration: 3000,
-            });
-          } catch (error) {
-            console.error('Error parsing SSE event:', error);
-          }
-        };
-
-        eventSource.onerror = (error) => {
-          console.error('EventSource error:', error);
-
-          // Close and attempt to reconnect
-          if (eventSource) {
-            eventSource.close();
-            eventSource = null;
-          }
-
-          // Attempt reconnect after 5 seconds if monitoring is active
-          if (fimStatus.is_monitoring) {
-            reconnectTimeout = setTimeout(() => {
-              setupEventSource();
-            }, 5000);
-          }
-        };
-      } catch (error) {
-        console.error('Failed to create EventSource:', error);
-      }
-    };
-
-    // Set up SSE connection if monitoring is active
-    if (fimStatus.is_monitoring) {
-      setupEventSource();
-    }
-
-    // Set up polling interval for status and baseline
+    // Set up polling intervals
     const statusInterval = setInterval(() => {
       fetchStatus();
       fetchBaseline();
-
-      // Also fetch changes via polling as fallback (every 60 seconds)
     }, 60000);
 
-    // Set up polling for changes as fallback (every 30 seconds)
     const changesInterval = setInterval(() => {
       if (fimStatus.is_monitoring) {
         fetchChanges();
@@ -378,32 +529,28 @@ const FileIntegrity = () => {
     // Cleanup function
     return () => {
       console.log('Cleaning up FIM intervals and EventSource');
-
-      // Clear intervals
       clearInterval(statusInterval);
       clearInterval(changesInterval);
 
-      // Clear reconnect timeout
-      if (reconnectTimeout) {
-        clearTimeout(reconnectTimeout);
-      }
-
-      // Close EventSource connection
-      if (eventSource) {
-        eventSource.close();
-        eventSource = null;
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
       }
     };
-  }, [fimStatus.is_monitoring]); // Re-run effect when monitoring status changes
+  }, []);
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'added': return 'default';
-      case 'modified': return 'secondary';
-      case 'deleted': return 'destructive';
-      default: return 'default';
+  // Handle monitoring status changes
+  useEffect(() => {
+    if (fimStatus.is_monitoring) {
+      setupEventSource();
+      // testSSEConnection();
+    } else {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
     }
-  };
+  }, [fimStatus.is_monitoring]);
 
   const handleSort = (field: 'type' | 'detected_at' | 'last_modified') => {
     if (sortField === field) {
@@ -467,7 +614,7 @@ const FileIntegrity = () => {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold">File Integrity Monitoring</h1>
-            <p className="text-muted-foreground">Monitor and track file system changes</p>
+            <p className="text-muted-foreground">Monitor and track file system changes in real-time</p>
           </div>
           <div className="flex gap-2">
             {fimStatus.is_monitoring ? (
@@ -558,20 +705,172 @@ const FileIntegrity = () => {
           <Shield className="h-4 w-4" />
           <AlertDescription>
             <div className="flex items-center justify-between">
-              <span>
-                <strong>Status:</strong> {fimStatus.is_monitoring ? 'Monitoring Active' : 'Monitoring Stopped'} |
-                <strong> Watched Directories:</strong> {fimStatus.total_watched} |
-                <strong> Monitored Files:</strong> {baselineFiles.length}
-              </span>
-              <Button variant="ghost" size="sm" onClick={fetchChanges}>
-                <RefreshCw className="h-4 w-4 mr-2" />
-                Refresh
-              </Button>
+              <div className="flex items-center gap-4">
+                <span className="flex items-center gap-1">
+                  <strong>Status:</strong>
+                  <Badge
+                    variant={fimStatus.is_monitoring ? "default" : "secondary"}
+                    className="ml-2"
+                  >
+                    {fimStatus.is_monitoring ? 'Monitoring Active' : 'Monitoring Stopped'}
+                  </Badge>
+                </span>
+                <span>
+                  <strong>Watched Directories:</strong> {fimStatus.total_watched}
+                </span>
+                <span>
+                  <strong>Monitored Files:</strong> {baselineFiles.length}
+                </span>
+                <span>
+                  <strong>Real-time Events:</strong> {realTimeEvents.length}
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <Button variant="ghost" size="sm" onClick={fetchChanges}>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Refresh
+                </Button>
+                {realTimeEvents.length > 0 && (
+                  <Button variant="ghost" size="sm" onClick={clearRealTimeEvents}>
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Clear Events
+                  </Button>
+                )}
+              </div>
             </div>
           </AlertDescription>
         </Alert>
 
-        {/* File Changes Table */}
+        {/* Real-time Events Section */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2">
+                <Clock className="h-5 w-5" />
+                Real-time Events ({realTimeEvents.length})
+              </CardTitle>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="auto-scroll" className="text-sm">Auto-scroll</Label>
+                  <Switch
+                    id="auto-scroll"
+                    checked={autoScrollRealTime}
+                    onCheckedChange={setAutoScrollRealTime}
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="event-limit" className="text-sm">Max Events:</Label>
+                  <select
+                    id="event-limit"
+                    value={realTimeLimit}
+                    onChange={(e) => setRealTimeLimit(Number(e.target.value))}
+                    className="text-sm border rounded px-2 py-1 bg-background"
+                  >
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                    <option value={250}>250</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {!fimStatus.is_monitoring ? (
+              <div className="text-center py-8 text-muted-foreground">
+                Start monitoring to see real-time events
+              </div>
+            ) : realTimeEvents.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                Waiting for file system events... Make changes to monitored directories to see them here.
+              </div>
+            ) : (
+              <div className="relative">
+                <ScrollArea className="h-[300px] w-full rounded-md border">
+                  <Table>
+                    <TableHeader className="sticky top-0 bg-background">
+                      <TableRow>
+                        <TableHead className="w-[120px] font-semibold">Time</TableHead>
+                        <TableHead className="w-[100px] font-semibold">Type</TableHead>
+                        <TableHead className="min-w-[300px] font-semibold">Path</TableHead>
+                        <TableHead className="w-[150px] font-semibold">Hash</TableHead>
+                        <TableHead className="w-[180px] font-semibold">Changed At</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {realTimeEvents.map((event) => (
+                        <TableRow
+                          key={event.id}
+                          className={
+                            event.type === 'added' ? 'bg-green-50 hover:bg-green-100 dark:bg-green-950/20 dark:hover:bg-green-900/30' :
+                              event.type === 'modified' ? 'bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/20 dark:hover:bg-amber-900/30' :
+                                'bg-red-50 hover:bg-red-100 dark:bg-red-950/20 dark:hover:bg-red-900/30'
+                          }
+                        >
+                          <TableCell className="py-3">
+                            <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                              {formatTime(event.receivedAt)}
+                            </div>
+                          </TableCell>
+                          <TableCell className="py-3">
+                            <Badge
+                              variant={
+                                event.type === 'added' ? 'default' :
+                                  event.type === 'modified' ? 'secondary' :
+                                    'destructive'
+                              }
+                              className="capitalize font-medium"
+                            >
+                              {event.type}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="py-3">
+                            <div className="font-mono text-sm truncate max-w-[300px]" title={event.path}>
+                              {event.path}
+                            </div>
+                          </TableCell>
+                          <TableCell className="py-3">
+                            <div className="font-mono text-xs text-gray-600 dark:text-gray-400 truncate" title={event.details.hash}>
+                              {event.details.hash ? `${event.details.hash.substring(0, 10)}...` : 'N/A'}
+                            </div>
+                          </TableCell>
+                          <TableCell className="py-3">
+                            <div className="text-sm text-gray-600 dark:text-gray-400">
+                              {event.details.timestamp ?
+                                new Date(event.details.timestamp).toLocaleTimeString('en-US', {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                  second: '2-digit',
+                                  hour12: true
+                                }) :
+                                'N/A'
+                              }
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      <div ref={eventsEndRef} />
+                    </TableBody>
+                  </Table>
+                </ScrollArea>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Separator */}
+        <div className="relative">
+          <div className="absolute inset-0 flex items-center">
+            <Separator className="w-full" />
+          </div>
+          <div className="relative flex justify-center">
+            <span className="bg-background px-4 text-sm text-muted-foreground">
+              Historical Data
+            </span>
+          </div>
+        </div>
+
+        {/* Detected Changes Table (Historical) */}
         <Card>
           <CardHeader>
             <CardTitle>Detected Changes ({fileChanges.length})</CardTitle>
@@ -581,7 +880,7 @@ const FileIntegrity = () => {
               <div className="text-center py-8">Loading changes...</div>
             ) : fileChanges.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
-                No changes detected. Start monitoring to track file integrity.
+                No historical changes detected.
               </div>
             ) : (
               <Table>
@@ -598,7 +897,9 @@ const FileIntegrity = () => {
                 <TableBody>
                   {fileChanges.map((file, index) => (
                     <TableRow key={index}>
-                      <TableCell className="font-mono text-sm">{file.path}</TableCell>
+                      <TableCell className="font-mono text-sm max-w-md truncate" title={file.path}>
+                        {file.path}
+                      </TableCell>
                       <TableCell className="font-mono text-xs text-muted-foreground">
                         {file.hash ? file.hash.substring(0, 12) + '...' : 'N/A'}
                       </TableCell>
@@ -648,6 +949,9 @@ const FileIntegrity = () => {
                 {fimStatus.watched_directories.map((dir, index) => (
                   <div key={index} className="flex items-center justify-between p-2 bg-muted rounded">
                     <span className="font-mono text-sm">{dir}</span>
+                    <Badge variant="outline">
+                      {fimStatus.watched_directories?.includes(dir) ? 'Active' : 'Configured'}
+                    </Badge>
                   </div>
                 ))}
               </div>

@@ -152,15 +152,35 @@ def stop_fim_monitoring(
 @router.get("/stream", summary="Real-time FIM change stream")
 async def stream_fim_events():
     """
-    SSE endpoint to stream real-time file change evnets.
+    SSE endpoint to stream real-time file change events.
     """
+    import json
+    from datetime import datetime
+
+    class DateTimeEncoder(json.JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            return super().default(obj)
 
     async def event_generator():
         while True:
             event = await event_queue.get()
-            yield f"data: {json.dumps(event)}\n\n"
+            # Use custom encoder to handle datetime objects
+            event_json = json.dumps(event, cls=DateTimeEncoder)
+            yield f"data: {event_json}\n\n"
 
     return EventSourceResponse(event_generator())
+
+
+@router.get("/stream-debug")
+async def stream_debug():
+    """Debug endpoint to check event queue"""
+    return {
+        "queue_size": event_queue.qsize(),
+        "is_monitoring": hasattr(fim_monitor, 'observer') and fim_monitor.observer and fim_monitor.observer.is_alive()
+    }
+
 
 @router.get("/status", response_model=FIMStatusResponse, summary="Get monitoring status")
 def get_fim_status(  # just fetch the all the watched directories from the 'directories' table in 'fim_db
