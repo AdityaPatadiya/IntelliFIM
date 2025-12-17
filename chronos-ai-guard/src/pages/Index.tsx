@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useInView } from 'react-intersection-observer';
 import { Button } from '@/components/ui/button';
@@ -15,16 +15,15 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { ParticleBackground } from '@/components/ParticleBackground';
 import { toast } from 'sonner';
 
 const Index = () => {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuth();
-  const [stats, setStats] = useState({
-    monitored: 0,
-    detected: 0,
-    prevented: 0
-  });
+  const [heroStats, setHeroStats] = useState({ monitored: 0, detected: 0, prevented: 0 });
+  const [stats, setStats] = useState({ monitored: 0, detected: 0, prevented: 0 });
+  const [scrollY, setScrollY] = useState(0);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -40,6 +39,15 @@ const Index = () => {
   const [statsRef, statsInView] = useInView({ triggerOnce: true, threshold: 0.1 });
   const [dashboardRef, dashboardInView] = useInView({ triggerOnce: true, threshold: 0.1 });
   const [contactRef, contactInView] = useInView({ triggerOnce: true, threshold: 0.1 });
+  const [modulesRef, modulesInView] = useInView({ triggerOnce: true, threshold: 0.1 });
+  const [useCasesRef, useCasesInView] = useInView({ triggerOnce: true, threshold: 0.1 });
+
+  // Parallax scroll effect
+  useEffect(() => {
+    const handleScroll = () => setScrollY(window.scrollY);
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -47,19 +55,40 @@ const Index = () => {
     }
   }, [isAuthenticated, navigate]);
 
-  // Animated counters
+  // Animated counters for HERO section - triggers immediately when hero is visible
+  useEffect(() => {
+    if (!heroInView) return;
+
+    const duration = 2000;
+    const steps = 60;
+    const interval = duration / steps;
+    const targets = { monitored: 15847, detected: 1243, prevented: 892 };
+
+    let step = 0;
+    const timer = setInterval(() => {
+      step++;
+      setHeroStats({
+        monitored: Math.floor((targets.monitored / steps) * step),
+        detected: Math.floor((targets.detected / steps) * step),
+        prevented: Math.floor((targets.prevented / steps) * step)
+      });
+      if (step >= steps) {
+        clearInterval(timer);
+        setHeroStats(targets);
+      }
+    }, interval);
+
+    return () => clearInterval(timer);
+  }, [heroInView]);
+
+  // Animated counters for STATS section
   useEffect(() => {
     if (!statsInView) return;
 
     const duration = 2000;
     const steps = 60;
     const interval = duration / steps;
-
-    const targets = {
-      monitored: 15847,
-      detected: 1243,
-      prevented: 892
-    };
+    const targets = { monitored: 15847, detected: 1243, prevented: 892 };
 
     let step = 0;
     const timer = setInterval(() => {
@@ -69,7 +98,6 @@ const Index = () => {
         detected: Math.floor((targets.detected / steps) * step),
         prevented: Math.floor((targets.prevented / steps) * step)
       });
-
       if (step >= steps) {
         clearInterval(timer);
         setStats(targets);
@@ -114,68 +142,88 @@ const Index = () => {
         </div>
       </header>
 
-      {/* Hero Section */}
-      <section ref={heroRef} className="relative overflow-hidden px-4 py-24 lg:py-32">
-        <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-accent/5 to-background -z-10" />
+      {/* Hero Section with Particle Background */}
+      <section ref={heroRef} className="relative overflow-hidden px-4 py-24 lg:py-32 min-h-[90vh] flex items-center">
+        <ParticleBackground />
+        <div 
+          className="absolute inset-0 bg-gradient-to-br from-primary/10 via-accent/5 to-background -z-10"
+          style={{ transform: `translateY(${scrollY * 0.3}px)` }}
+        />
+        {/* Floating orbs with parallax */}
+        <div 
+          className="absolute top-20 left-10 w-72 h-72 bg-primary/20 rounded-full blur-3xl -z-10"
+          style={{ transform: `translate(${scrollY * 0.1}px, ${scrollY * 0.2}px)` }}
+        />
+        <div 
+          className="absolute bottom-20 right-10 w-96 h-96 bg-accent/15 rounded-full blur-3xl -z-10"
+          style={{ transform: `translate(${-scrollY * 0.15}px, ${scrollY * 0.1}px)` }}
+        />
         <div className="container mx-auto max-w-7xl">
           <div className="grid gap-12 lg:grid-cols-[1fr,420px] lg:gap-16 items-center">
-            <div className={`space-y-8 transition-all duration-1000 ${heroInView ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-10'}`}>
-              <Badge variant="secondary" className="w-fit">
+            <div 
+              className={`space-y-8 transition-all duration-1000 ${heroInView ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-10'}`}
+              style={{ transform: `translateY(${scrollY * -0.05}px)` }}
+            >
+              <Badge variant="secondary" className="w-fit animate-pulse">
                 <Zap className="mr-1 h-3 w-3" />
                 Enterprise-Grade Security
               </Badge>
-              <h1 className="text-4xl font-bold tracking-tight lg:text-6xl">
+              <h1 className="text-4xl font-bold tracking-tight lg:text-6xl bg-gradient-to-r from-foreground via-primary to-accent bg-clip-text text-transparent">
                 AI-Driven File Integrity & Intrusion Prevention
               </h1>
               <p className="text-xl text-muted-foreground">
                 Next-generation security monitoring that combines file integrity, network analysis, and AI-powered anomaly detection to protect your enterprise infrastructure.
               </p>
               <div className="flex flex-wrap gap-4">
-                <Button size="lg" className="group" onClick={() => navigate('/auth')}>
-                  Access Dashboard
-                  <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" />
+                <Button size="lg" className="group relative overflow-hidden" onClick={() => navigate('/auth')}>
+                  <span className="relative z-10">Access Dashboard</span>
+                  <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1 relative z-10" />
+                  <div className="absolute inset-0 bg-gradient-to-r from-primary to-accent opacity-0 group-hover:opacity-100 transition-opacity" />
                 </Button>
-                <Button size="lg" variant="outline">
-                  <Download className="mr-2 h-4 w-4" />
+                <Button size="lg" variant="outline" className="group">
+                  <Download className="mr-2 h-4 w-4 group-hover:animate-bounce" />
                   Download Agent
                 </Button>
               </div>
             </div>
 
-            <div className={`space-y-4 transition-all duration-1000 delay-300 ${heroInView ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-10'}`}>
-              <Card className="border-border bg-card/50 backdrop-blur">
+            <div 
+              className={`space-y-4 transition-all duration-1000 delay-300 ${heroInView ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-10'}`}
+              style={{ transform: `translateY(${scrollY * -0.08}px)` }}
+            >
+              <Card className="border-border bg-card/50 backdrop-blur hover:scale-105 transition-transform duration-300 hover:border-primary/50">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                   <CardTitle className="text-sm font-medium">Active Agents</CardTitle>
-                  <ShieldCheck className="h-5 w-5 text-primary" />
+                  <ShieldCheck className="h-5 w-5 text-primary animate-pulse" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-3xl font-bold">{stats.monitored.toLocaleString()}</div>
+                  <div className="text-3xl font-bold">{heroStats.monitored.toLocaleString()}</div>
                   <p className="text-xs text-muted-foreground mt-1">
                     <span className="text-success">↑ +12%</span> from last week
                   </p>
                 </CardContent>
               </Card>
               
-              <Card className="border-border bg-card/50 backdrop-blur">
+              <Card className="border-border bg-card/50 backdrop-blur hover:scale-105 transition-transform duration-300 hover:border-destructive/50">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                   <CardTitle className="text-sm font-medium">Threats Detected</CardTitle>
                   <AlertTriangle className="h-5 w-5 text-destructive" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-3xl font-bold">{stats.detected.toLocaleString()}</div>
+                  <div className="text-3xl font-bold">{heroStats.detected.toLocaleString()}</div>
                   <p className="text-xs text-muted-foreground mt-1">
                     <span className="text-success">↑ +3</span> from last week
                   </p>
                 </CardContent>
               </Card>
               
-              <Card className="border-border bg-card/50 backdrop-blur">
+              <Card className="border-border bg-card/50 backdrop-blur hover:scale-105 transition-transform duration-300 hover:border-success/50">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                   <CardTitle className="text-sm font-medium">Prevention Actions</CardTitle>
                   <Zap className="h-5 w-5 text-success" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-3xl font-bold">{stats.prevented.toLocaleString()}</div>
+                  <div className="text-3xl font-bold">{heroStats.prevented.toLocaleString()}</div>
                   <p className="text-xs text-muted-foreground mt-1">
                     <span className="text-success">↓ -2</span> from last week
                   </p>
@@ -187,7 +235,11 @@ const Index = () => {
       </section>
 
       {/* Key Highlights */}
-      <section ref={highlightsRef} className="px-4 py-16 bg-muted/30">
+      <section ref={highlightsRef} className="px-4 py-16 bg-muted/30 relative overflow-hidden">
+        <div 
+          className="absolute inset-0 bg-gradient-to-r from-primary/5 to-accent/5 -z-10"
+          style={{ transform: `translateX(${scrollY * 0.1}px)` }}
+        />
         <div className="container mx-auto max-w-6xl">
           <div className={`grid gap-8 md:grid-cols-2 lg:grid-cols-4 transition-all duration-1000 ${highlightsInView ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
             {[
@@ -196,9 +248,20 @@ const Index = () => {
               { icon: Brain, title: 'AI Threat Detection', desc: 'Machine learning powered' },
               { icon: Zap, title: 'Automated Response', desc: 'Instant threat mitigation' }
             ].map((item, i) => (
-              <Card key={i} className="border-border/50 hover:border-primary/50 transition-all duration-300">
+              <Card 
+                key={i} 
+                className="border-border/50 hover:border-primary/50 transition-all duration-500 hover:scale-105 hover:-translate-y-2 hover:shadow-xl hover:shadow-primary/10"
+                style={{ 
+                  transitionDelay: `${i * 100}ms`,
+                  opacity: highlightsInView ? 1 : 0,
+                  transform: highlightsInView ? 'translateY(0)' : 'translateY(20px)'
+                }}
+              >
                 <CardHeader>
-                  <item.icon className="h-10 w-10 text-primary mb-2" />
+                  <div className="relative">
+                    <item.icon className="h-10 w-10 text-primary mb-2 transition-transform duration-300 group-hover:scale-110" />
+                    <div className="absolute inset-0 bg-primary/20 blur-xl rounded-full opacity-0 hover:opacity-100 transition-opacity" />
+                  </div>
                   <CardTitle className="text-lg">{item.title}</CardTitle>
                   <CardDescription>{item.desc}</CardDescription>
                 </CardHeader>
@@ -298,21 +361,37 @@ const Index = () => {
       </section>
 
       {/* Core Modules */}
-      <section className="px-4 py-20 bg-muted/30">
+      <section ref={modulesRef} className="px-4 py-20 bg-muted/30 relative overflow-hidden">
+        <div 
+          className="absolute top-0 right-0 w-96 h-96 bg-primary/10 rounded-full blur-3xl -z-10"
+          style={{ transform: `translate(${scrollY * 0.05}px, ${-scrollY * 0.1}px)` }}
+        />
         <div className="container mx-auto max-w-6xl">
-          <div className="text-center mb-12">
+          <div className={`text-center mb-12 transition-all duration-1000 ${modulesInView ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
             <h2 className="text-3xl font-bold mb-4">Core Security Modules</h2>
             <p className="text-muted-foreground">Comprehensive suite of enterprise security tools</p>
           </div>
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             {modules.map((module, i) => (
-              <Card key={i} className="group hover:border-primary/50 transition-all duration-300 cursor-pointer" onClick={() => navigate('/auth')}>
+              <Card 
+                key={i} 
+                className="group hover:border-primary/50 transition-all duration-500 cursor-pointer hover:scale-105 hover:-translate-y-2 hover:shadow-xl hover:shadow-primary/10" 
+                onClick={() => navigate('/auth')}
+                style={{ 
+                  transitionDelay: `${i * 50}ms`,
+                  opacity: modulesInView ? 1 : 0,
+                  transform: modulesInView ? 'translateY(0)' : 'translateY(20px)'
+                }}
+              >
                 <CardHeader>
                   <div className="flex items-start justify-between">
-                    <module.icon className="h-10 w-10 text-primary" />
-                    <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:translate-x-1 transition-transform" />
+                    <div className="relative">
+                      <module.icon className="h-10 w-10 text-primary group-hover:scale-110 transition-transform duration-300" />
+                      <div className="absolute inset-0 bg-primary/30 blur-xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </div>
+                    <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:translate-x-2 group-hover:text-primary transition-all duration-300" />
                   </div>
-                  <CardTitle className="mt-4">{module.title}</CardTitle>
+                  <CardTitle className="mt-4 group-hover:text-primary transition-colors">{module.title}</CardTitle>
                   <CardDescription>{module.description}</CardDescription>
                 </CardHeader>
               </Card>
@@ -367,40 +446,41 @@ const Index = () => {
       </section>
 
       {/* Use Cases */}
-      <section className="px-4 py-20 bg-muted/30">
+      <section ref={useCasesRef} className="px-4 py-20 bg-muted/30 relative overflow-hidden">
+        <div 
+          className="absolute bottom-0 left-0 w-80 h-80 bg-accent/10 rounded-full blur-3xl -z-10"
+          style={{ transform: `translate(${-scrollY * 0.05}px, ${scrollY * 0.08}px)` }}
+        />
         <div className="container mx-auto max-w-6xl">
-          <div className="text-center mb-12">
+          <div className={`text-center mb-12 transition-all duration-1000 ${useCasesInView ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
             <h2 className="text-3xl font-bold mb-4">Use Cases</h2>
             <p className="text-muted-foreground">Trusted by organizations across industries</p>
           </div>
           <div className="grid gap-8 md:grid-cols-3">
-            <Card>
-              <CardHeader>
-                <Server className="h-10 w-10 text-primary mb-4" />
-                <CardTitle>Enterprises</CardTitle>
-                <CardDescription>
-                  Comprehensive security monitoring for large-scale infrastructure with compliance reporting and advanced threat detection capabilities.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-            <Card>
-              <CardHeader>
-                <Globe className="h-10 w-10 text-primary mb-4" />
-                <CardTitle>MSMEs</CardTitle>
-                <CardDescription>
-                  Affordable, easy-to-deploy security solution for small and medium businesses requiring enterprise-grade protection without complexity.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-            <Card>
-              <CardHeader>
-                <Shield className="h-10 w-10 text-primary mb-4" />
-                <CardTitle>Security Teams</CardTitle>
-                <CardDescription>
-                  Advanced SOC tools with real-time alerting, incident response automation, and detailed forensic analysis capabilities.
-                </CardDescription>
-              </CardHeader>
-            </Card>
+            {[
+              { icon: Server, title: 'Enterprises', desc: 'Comprehensive security monitoring for large-scale infrastructure with compliance reporting and advanced threat detection capabilities.' },
+              { icon: Globe, title: 'MSMEs', desc: 'Affordable, easy-to-deploy security solution for small and medium businesses requiring enterprise-grade protection without complexity.' },
+              { icon: Shield, title: 'Security Teams', desc: 'Advanced SOC tools with real-time alerting, incident response automation, and detailed forensic analysis capabilities.' }
+            ].map((item, i) => (
+              <Card 
+                key={i}
+                className="hover:scale-105 hover:-translate-y-2 transition-all duration-500 hover:shadow-xl hover:shadow-primary/10"
+                style={{ 
+                  transitionDelay: `${i * 100}ms`,
+                  opacity: useCasesInView ? 1 : 0,
+                  transform: useCasesInView ? 'translateY(0)' : 'translateY(20px)'
+                }}
+              >
+                <CardHeader>
+                  <div className="relative w-fit">
+                    <item.icon className="h-10 w-10 text-primary mb-4" />
+                    <div className="absolute inset-0 bg-primary/20 blur-xl rounded-full" />
+                  </div>
+                  <CardTitle>{item.title}</CardTitle>
+                  <CardDescription>{item.desc}</CardDescription>
+                </CardHeader>
+              </Card>
+            ))}
           </div>
         </div>
       </section>
