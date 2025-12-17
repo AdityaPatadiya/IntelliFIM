@@ -19,6 +19,33 @@ from src.utils.thread_pool import thread_pool
 from src.utils.database_manager import get_thread_local_fim_session, close_thread_local_fim_session
 
 
+class EventDeduplicator:
+    """Prevents duplicate events within a short time window"""
+    def __init__(self, window_seconds=1.0):
+        self.window_seconds = window_seconds
+        self.recent_events = {}
+        self.lock = threading.Lock()
+
+    def should_process(self, event_type, file_path):
+        """Check if we should process this event (not a duplicate)"""
+        current_time = time.time()
+        event_key = f"{event_type}_{file_path}"
+
+        with self.lock:
+            to_remove = []
+            for key, (event_time, _) in self.recent_events.items():
+                if current_time - event_time > self.window_seconds:
+                    to_remove.append(key)
+
+            for key in to_remove:
+                self.recent_events.pop(key, None)
+
+            if event_key in self.recent_events:
+                return False            
+            self.recent_events[event_key] = (current_time, file_path)
+            return True
+
+
 async def push_event(change_type, file_path, details):
     # Ensure details is a dictionary with serializable values
     if isinstance(details, dict):
@@ -26,12 +53,16 @@ async def push_event(change_type, file_path, details):
         for key, value in details.items():
             if hasattr(value, 'isoformat'):
                 details[key] = value.isoformat()
-
-    await event_queue.put({
+            elif isinstance(value, datetime):
+                details[key] = value.strftime("%Y-%m-%d %H:%M:%S")
+    
+    event_data = {
         "type": change_type,
         "path": file_path,
         "details": details
-    })
+    }
+
+    await event_queue.put(event_data)
 
 
 class FIMEventHandler(FileSystemEventHandler):
@@ -154,6 +185,9 @@ class FIMEventHandler(FileSystemEventHandler):
             _path = event.src_path
             is_file = not event.is_directory
 
+            if not self.parent.event_deduplicator.should_process("created", _path):
+                return
+
             if event.is_directory:
                 current_hash = self._calculate_hash_async(_path, is_folder=True)
             else:
@@ -204,6 +238,9 @@ class FIMEventHandler(FileSystemEventHandler):
                 return
             _path = event.src_path
             is_file = not event.is_directory
+
+            if not self.parent.event_deduplicator.should_process("modified", _path):
+                return
 
             if event.is_directory:
                 current_hash = self._calculate_hash_async(_path, is_folder=True)
@@ -261,6 +298,10 @@ class FIMEventHandler(FileSystemEventHandler):
                 return  
             _path = event.src_path
             is_file = not event.is_directory
+
+            if not self.parent.event_deduplicator.should_process("deleted", _path):
+                return
+
             dir_path = str(self._get_directory_path(_path))
             file_path = str(_path)
 
@@ -286,6 +327,8 @@ class MonitorChanges:
         self.fim_instance = FIM_monitor()
         self.configure_logger = configure_logger()
         self.parent_thread_pool = thread_pool
+
+        self.event_deduplicator = EventDeduplicator(window_seconds=0.5)
 
         self.reset_state()
 
@@ -319,7 +362,8 @@ class MonitorChanges:
         asyncio.run_coroutine_threadsafe(
             push_event("added", _path, {
                 "hash": current_hash,
-                "timestamp": timestamp
+                "timestamp": timestamp,
+                "item_type": "file" if is_file else "folder"
             }),
             get_fim_loop()
         )
@@ -350,7 +394,8 @@ class MonitorChanges:
         asyncio.run_coroutine_threadsafe(
             push_event("modified", _path, {
                 "hash": current_hash,
-                "timestamp": timestamp
+                "timestamp": timestamp,
+                "item_type": "file" if is_file else "folder"
             }),
             get_fim_loop()
         )
@@ -368,7 +413,8 @@ class MonitorChanges:
 
         asyncio.run_coroutine_threadsafe(
             push_event("deleted", _path, {
-                "timestamp": timestamp
+                "timestamp": timestamp,
+                "item_type": "file" if is_file else "folder"
             }),
             get_fim_loop()
         )

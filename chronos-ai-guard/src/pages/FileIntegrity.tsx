@@ -32,6 +32,7 @@ interface RealTimeEvent {
   details: {
     hash?: string;
     timestamp: string;
+    item_type?: 'file' | 'folder';
   };
   receivedAt: string;
   id: string;
@@ -62,6 +63,7 @@ const FileIntegrity = () => {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isStartDialogOpen, setIsStartDialogOpen] = useState(false);
   const [baselineFiles, setBaselineFiles] = useState<BaselineFile[]>([]);
+  const [selectedEvent, setSelectedEvent] = useState<RealTimeEvent | null>(null);
   const [loadingBaseline, setLoadingBaseline] = useState(false);
   const [sortField, setSortField] = useState<'type' | 'detected_at' | 'last_modified' | null>(null);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
@@ -792,20 +794,21 @@ const FileIntegrity = () => {
                       <TableRow>
                         <TableHead className="w-[120px] font-semibold">Time</TableHead>
                         <TableHead className="w-[100px] font-semibold">Type</TableHead>
-                        <TableHead className="min-w-[300px] font-semibold">Path</TableHead>
+                        <TableHead className="w-[80px] font-semibold">Document Type</TableHead> {/* NEW COLUMN */}
+                        <TableHead className="min-w-[250px] font-semibold">Path</TableHead>
                         <TableHead className="w-[150px] font-semibold">Hash</TableHead>
-                        <TableHead className="w-[180px] font-semibold">Changed At</TableHead>
+                        <TableHead className="w-[150px] font-semibold">Changed At</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {realTimeEvents.map((event) => (
                         <TableRow
                           key={event.id}
-                          className={
-                            event.type === 'added' ? 'bg-green-50 hover:bg-green-100 dark:bg-green-950/20 dark:hover:bg-green-900/30' :
-                              event.type === 'modified' ? 'bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/20 dark:hover:bg-amber-900/30' :
-                                'bg-red-50 hover:bg-red-100 dark:bg-red-950/20 dark:hover:bg-red-900/30'
-                          }
+                          onClick={() => setSelectedEvent(event)} // Make row clickable
+                          className={`cursor-pointer hover:bg-muted/50 ${event.type === 'added' ? 'bg-green-50 hover:bg-green-100 dark:bg-green-950/20 dark:hover:bg-green-900/30' :
+                            event.type === 'modified' ? 'bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/20 dark:hover:bg-amber-900/30' :
+                              'bg-red-50 hover:bg-red-100 dark:bg-red-950/20 dark:hover:bg-red-900/30'
+                            }`}
                         >
                           <TableCell className="py-3">
                             <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
@@ -824,8 +827,18 @@ const FileIntegrity = () => {
                               {event.type}
                             </Badge>
                           </TableCell>
+                          <TableCell className="py-3"> {/* NEW CELL */}
+                            <Badge
+                              variant="outline"
+                              className={`capitalize ${event.details.item_type === 'file' ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                                'bg-purple-50 text-purple-700 border-purple-200'
+                                }`}
+                            >
+                              {event.details.item_type || 'unknown'}
+                            </Badge>
+                          </TableCell>
                           <TableCell className="py-3">
-                            <div className="font-mono text-sm truncate max-w-[300px]" title={event.path}>
+                            <div className="font-mono text-sm truncate max-w-[250px]" title={event.path}>
                               {event.path}
                             </div>
                           </TableCell>
@@ -1095,6 +1108,104 @@ const FileIntegrity = () => {
             )}
           </CardContent>
         </Card>
+
+        {/* Real-time Event Details Dialog */}
+        <Dialog open={!!selectedEvent} onOpenChange={() => setSelectedEvent(null)}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Event Details</DialogTitle>
+              <DialogDescription>
+                Complete information about the file system event
+              </DialogDescription>
+            </DialogHeader>
+            {selectedEvent && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-sm font-semibold">Event Type</Label>
+                    <div className="mt-1">
+                      <Badge
+                        variant={
+                          selectedEvent.type === 'added' ? 'default' :
+                            selectedEvent.type === 'modified' ? 'secondary' :
+                              'destructive'
+                        }
+                        className="capitalize"
+                      >
+                        {selectedEvent.type}
+                      </Badge>
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-semibold">Document Type</Label>
+                    <div className="mt-1">
+                      <Badge
+                        variant="outline"
+                        className={`capitalize ${selectedEvent.details.item_type === 'file' ? 'bg-blue-50 text-blue-700' :
+                            'bg-purple-50 text-purple-700'
+                          }`}
+                      >
+                        {selectedEvent.details.item_type || 'unknown'}
+                      </Badge>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-sm font-semibold">Full Path</Label>
+                  <div className="mt-1 p-2 bg-muted rounded font-mono text-sm break-all">
+                    {selectedEvent.path}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-sm font-semibold">Hash</Label>
+                    <div className="mt-1 p-2 bg-muted rounded font-mono text-xs break-all">
+                      {selectedEvent.details.hash || 'N/A'}
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-semibold">Event Timestamp</Label>
+                    <div className="mt-1 p-2 bg-muted rounded text-sm">
+                      {selectedEvent.details.timestamp ?
+                        new Date(selectedEvent.details.timestamp).toLocaleString() :
+                        'N/A'
+                      }
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-sm font-semibold">Received At</Label>
+                    <div className="mt-1 p-2 bg-muted rounded text-sm">
+                      {new Date(selectedEvent.receivedAt).toLocaleString()}
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-semibold">Event ID</Label>
+                    <div className="mt-1 p-2 bg-muted rounded font-mono text-xs break-all">
+                      {selectedEvent.id}
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-sm font-semibold">Event Details (Raw)</Label>
+                  <pre className="mt-1 p-2 bg-muted rounded text-xs overflow-auto max-h-32">
+                    {JSON.stringify(selectedEvent.details, null, 2)}
+                  </pre>
+                </div>
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setSelectedEvent(null)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* File Details Modal */}
         <Dialog open={!!selectedFile} onOpenChange={() => setSelectedFile(null)}>
