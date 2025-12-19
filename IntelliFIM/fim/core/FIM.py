@@ -1,3 +1,4 @@
+# fim/core/FIM.py - Add these imports at the top
 import os
 import time
 import json
@@ -10,13 +11,17 @@ import concurrent.futures
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+# Django imports
+from django.utils import timezone
+from django.core.cache import cache
+from django.db import transaction
+
+# Local imports
+from .django_adapters import DjangoDatabaseAdapter
+from .fim_utils import FIM_monitor
+from .fim_shared import event_queue, get_fim_loop
 from src.utils.backup import Backup
-from src.utils.database import DatabaseOperation
-from src.FIM.fim_utils import FIM_monitor
-from src.config.logging_config import configure_logger
-from src.FIM.fim_shared import event_queue, get_fim_loop
 from src.utils.thread_pool import thread_pool
-from src.utils.database_manager import get_thread_local_fim_session, close_thread_local_fim_session
 
 
 class EventDeduplicator:
@@ -66,15 +71,17 @@ async def push_event(change_type, file_path, details):
 
 
 class FIMEventHandler(FileSystemEventHandler):
-    def __init__(self, parent, logger, db_session, auth_username):
+    def __init__(self, parent, logger, auth_username):
         super().__init__()
         self.parent = parent
         self.logger = logger
         self.directory_path = None
-        self.main_db_session = db_session
         self.auth_username = auth_username
         self.backup_instance = Backup()
         self.is_active = True
+        
+        # Use Django database adapter
+        self.database_adapter = DjangoDatabaseAdapter()
 
         # Cache for hashing results to avoid recomputing
         self.hash_cache = {}
@@ -146,9 +153,7 @@ class FIMEventHandler(FileSystemEventHandler):
             return "HASH_ERROR"
     
     def _should_backup(self, path):
-        """Determine if backup should be created for this change.
-           Don't backup too frequently - only if file hasn't been backed up recently.
-        """
+        """Determine if backup should be created for this change."""
         backup_key = f"backup_{path}"
         current_time = time.time()
 
@@ -165,18 +170,13 @@ class FIMEventHandler(FileSystemEventHandler):
         return True
 
     def _process_addition(self, _path, current_hash, is_file):
-        """Process addition in thread pool with thread-local session."""
-        session = get_thread_local_fim_session()
+        """Process addition in thread pool with Django ORM."""
         try:
-            database_instance = DatabaseOperation(session)
-            database_instance.monitored_roots = self.parent.current_directories
-            self.parent.file_folder_addition(_path, current_hash, is_file, self.logger, database_instance)
-            session.commit()
+            self.database_adapter.monitored_roots = self.parent.current_directories
+            self.parent.file_folder_addition(_path, current_hash, is_file, 
+                                           self.logger, self.database_adapter)
         except Exception as e:
-            session.rollback()
             self.logger.error(f"Addition processing error: {str(e)}")
-        finally:
-            close_thread_local_fim_session()
 
     def on_created(self, event):
         try:
@@ -211,26 +211,21 @@ class FIMEventHandler(FileSystemEventHandler):
             self.logger.error(f"Creation error: {str(e)}")
 
     def _process_modification(self, _path, current_hash, is_file, dir_path, file_path):
-        """Process modification in thread pool with thread-local session"""
-        session = get_thread_local_fim_session()
+        """Process modification with Django ORM"""
         try:
-            database_instance = DatabaseOperation(session)
-            database_instance.monitored_roots = self.parent.current_directories
-
+            self.database_adapter.monitored_roots = self.parent.current_directories
+            
             original_hash = ""
             try:
-                baseline = database_instance.get_current_baseline(dir_path)
+                baseline = self.database_adapter.get_current_baseline(dir_path)
                 original_hash = baseline.get(file_path, {}).get('hash', '')
             except Exception:
                 pass
 
-            self.parent.file_folder_modification(_path, current_hash, original_hash, is_file, self.logger, database_instance)
-            session.commit()
+            self.parent.file_folder_modification(_path, current_hash, original_hash, 
+                                               is_file, self.logger, self.database_adapter)
         except Exception as e:
-            session.rollback()
             self.logger.error(f"Modification processing error: {str(e)}")
-        finally:
-            close_thread_local_fim_session()
 
     def on_modified(self, event):
         try:
@@ -268,29 +263,24 @@ class FIMEventHandler(FileSystemEventHandler):
             self.logger.error(f"Modification error: {str(e)}")
 
     def _process_deletion(self, _path, is_file, dir_path, file_path):
-        """Process deletion in therad pool with thread-local session."""
-        session = get_thread_local_fim_session()
+        """Process deletion with Django ORM."""
         try:
-            database_instance = DatabaseOperation(session)
-            database_instance.monitored_roots = self.parent.current_directories
-
+            self.database_adapter.monitored_roots = self.parent.current_directories
+            
             original_hash = ""
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             try:
-                baseline = database_instance.get_current_baseline(dir_path)
+                baseline = self.database_adapter.get_current_baseline(dir_path)
                 path_norm = os.path.normpath(file_path)
                 original_hash = baseline.get(path_norm, {}).get('hash', '')
                 timestamp = baseline.get(path_norm, {}).get('last_modified', timestamp)
             except Exception:
                 pass
 
-            self.parent.file_folder_deletion(_path, original_hash, is_file, self.logger, database_instance)
-            session.commit()
+            self.parent.file_folder_deletion(_path, original_hash, is_file, 
+                                           self.logger, self.database_adapter)
         except Exception as e:
-            session.rollback()
             self.logger.error(f"Deletion processing error: {str(e)}")
-        finally:
-            close_thread_local_fim_session()
 
     def on_deleted(self, event):
         try:
@@ -343,12 +333,11 @@ class MonitorChanges:
         self.event_handlers = []
         self.current_logger = None
         self.auth_username = None
-        self.db_session = None
 
         if hasattr(self, '_stop_flag'):
             self._stop_flag.clear()
 
-    def file_folder_addition(self, _path, current_hash, is_file, logger, database_instance):
+    def file_folder_addition(self, _path, current_hash, is_file, logger, database_adapter):
         change_type = "File" if is_file else "Folder"
         timestamp = self._get_timestamp_safe(_path)
 
@@ -359,6 +348,16 @@ class MonitorChanges:
                 "last_modified": timestamp
             }
 
+        # Record in database
+        database_adapter.record_file_event(
+            directory_path=os.path.dirname(_path),
+            item_path=_path,
+            item_hash=current_hash,
+            item_type='file' if is_file else 'folder',
+            last_modified=timestamp,
+            status='added'
+        )
+
         asyncio.run_coroutine_threadsafe(
             push_event("added", _path, {
                 "hash": current_hash,
@@ -368,7 +367,7 @@ class MonitorChanges:
             get_fim_loop()
         )
 
-    def file_folder_modification(self, _path, current_hash, original_hash, is_file, logger, database_instance):
+    def file_folder_modification(self, _path, current_hash, original_hash, is_file, logger, database_adapter):
         change_type = "File" if is_file else "Folder"
         timestamp = self._get_timestamp_safe(_path)
 
@@ -387,6 +386,16 @@ class MonitorChanges:
                         "hash": current_hash,
                         "last_modified": timestamp
                     }
+            
+            # Record in database
+            database_adapter.record_file_event(
+                directory_path=os.path.dirname(_path),
+                item_path=_path,
+                item_hash=current_hash,
+                item_type='file' if is_file else 'folder',
+                last_modified=timestamp,
+                status='modified'
+            )
         else:
             if _path in self.reported_changes["modified"]:
                 del self.reported_changes["modified"][_path]
@@ -400,7 +409,7 @@ class MonitorChanges:
             get_fim_loop()
         )
 
-    def file_folder_deletion(self, _path, original_hash, is_file, logger, database_instance):
+    def file_folder_deletion(self, _path, original_hash, is_file, logger, database_adapter):
         change_type = "File" if is_file else "Folder"
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -410,6 +419,16 @@ class MonitorChanges:
                 "hash": original_hash,
                 "last_modified": timestamp
             }
+
+        # Record in database
+        database_adapter.record_file_event(
+            directory_path=os.path.dirname(_path),
+            item_path=_path,
+            item_hash=original_hash,
+            item_type='file' if is_file else 'folder',
+            last_modified=timestamp,
+            status='deleted'
+        )
 
         asyncio.run_coroutine_threadsafe(
             push_event("deleted", _path, {
@@ -426,7 +445,7 @@ class MonitorChanges:
         except (FileNotFoundError, OSError):
             return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    def monitor_changes(self, auth_username, directories, excluded_files, db_session):
+    def monitor_changes(self, auth_username, directories, excluded_files, db_session=None):
         """Monitor specified directories for changes using Watchdog."""
         try:
             self.stop_monitoring()
@@ -434,10 +453,9 @@ class MonitorChanges:
 
             self.auth_username = auth_username
             self.current_directories = directories
-            self.db_session = db_session
 
             self.observer = Observer()
-            database_instance = DatabaseOperation(db_session) if db_session else None
+            database_adapter = DjangoDatabaseAdapter()
 
             # initialize baselines in thread pool
             futures = []
@@ -447,7 +465,7 @@ class MonitorChanges:
 
                 future = self.parent_thread_pool.submit(
                     self._initialize_directory_baseline,
-                    directory, auth_username, db_session, database_instance
+                    directory, auth_username, database_adapter
                 )
                 futures.append(future)
 
@@ -464,7 +482,7 @@ class MonitorChanges:
                 logger = self.configure_logger._get_or_create_logger(self.auth_username, directory)
                 logger.info(f"Starting monitoring for {directory}")
 
-                event_handler = FIMEventHandler(self, logger, db_session, self.auth_username)
+                event_handler = FIMEventHandler(self, logger, self.auth_username)
                 event_handler.directory_path = directory
                 self.observer.schedule(event_handler, directory, recursive=True)
                 self.event_handlers.append(event_handler)
@@ -509,25 +527,23 @@ class MonitorChanges:
                 pass
         
         # Save any pending changes
-        if hasattr(self, 'db_session') and self.db_session:
-            self._save_reported_changes(self.db_session)
+        self._save_reported_changes()
 
-    def _initialize_directory_baseline(self, directory, auth_username, db_session, database_instance):
+    def _initialize_directory_baseline(self, directory, auth_username, database_adapter):
         """Initialize baseline for a directory (run in thread pool)."""
-        session = get_thread_local_fim_session()
         try:
-            thread_database_instance = DatabaseOperation(session)
-            thread_database_instance.monitored_roots = self.current_directories
+            database_adapter.monitored_roots = self.current_directories
 
+            # Create backup
             self.backup_instance.create_backup(directory, auth_username)
-            baseline = self.fim_instance.tracking_directory(auth_username, directory, session)
-
-            baseline_copy = dict(baseline)
-            save_count = 0
-
-            for path, data in baseline_copy.items():
+            
+            # Track directory and get baseline
+            baseline = self.fim_instance.tracking_directory(auth_username, directory, None)
+            
+            # Save baseline to database
+            for path, data in baseline.items():
                 try:
-                    thread_database_instance.record_file_event(
+                    database_adapter.record_file_event(
                         directory_path=directory,
                         item_path=path,
                         item_hash=data.get('hash', ''),
@@ -535,18 +551,13 @@ class MonitorChanges:
                         last_modified=data.get('last_modified', datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
                         status='current'
                     )
-                    save_count += 1
                 except Exception as e:
                     print(f"Warning: could not save {path}: {str(e)}")
 
-            session.commit()
-            print(f"Baseline initialized for {directory} ({save_count} items)")
+            print(f"Baseline initialized for {directory}")
         except Exception as e:
-            session.rollback()
             print(f"Failed to initialize baseline for {directory}: {str(e)}")
             traceback.print_exc()
-        finally:
-            close_thread_local_fim_session()
 
     def _run_observer(self):
         """Run observer in a separate thread."""
@@ -564,55 +575,50 @@ class MonitorChanges:
     def _cleanup(self):
         """Cleanup resources."""
         self.stop_monitoring()
-        if hasattr(self, 'db_session') and self.db_session:
-            self._save_reported_changes(self.db_session)
 
-    def _save_reported_changes(self, db_session):
-        database_instance = DatabaseOperation(db_session)
-        database_instance.monitored_roots = self.current_directories
+    def _save_reported_changes(self):
+        """Save reported changes to database."""
+        database_adapter = DjangoDatabaseAdapter()
+        database_adapter.monitored_roots = self.current_directories
+        
         for change_type, changes in self.reported_changes.items():
             for path, data in changes.items():
-                # Resolve the monitored root directory that contains this path
+                # Resolve the monitored root directory
                 monitored_root = None
                 try:
                     abs_path = os.path.abspath(path)
                 except Exception:
                     abs_path = path
 
-                # Normalize both sides before comparison
                 for root in self.current_directories:
                     try:
                         root_abs = os.path.abspath(root)
+                        if not root_abs.endswith(os.sep):
+                            root_abs_cmp = root_abs + os.sep
+                        else:
+                            root_abs_cmp = root_abs
+
+                        if not abs_path.endswith(os.sep):
+                            abs_path_cmp = abs_path + os.sep
+                        else:
+                            abs_path_cmp = abs_path
+
+                        if abs_path_cmp.startswith(root_abs_cmp) or abs_path == root_abs:
+                            monitored_root = root_abs
+                            break
                     except Exception:
-                        root_abs = root
+                        continue
 
-                    # Ensure trailing sep won't break startswith comparisons
-                    if not root_abs.endswith(os.sep):
-                        root_abs_cmp = root_abs + os.sep
-                    else:
-                        root_abs_cmp = root_abs
-
-                    if not abs_path.endswith(os.sep):
-                        abs_path_cmp = abs_path + os.sep
-                    else:
-                        abs_path_cmp = abs_path
-
-                    if abs_path_cmp.startswith(root_abs_cmp) or abs_path == root_abs:
-                        monitored_root = root_abs
-                        break
-
-                # fallback to dirname (should rarely happen)
                 if not monitored_root:
                     monitored_root = os.path.dirname(path)
 
                 try:
                     item_type = "file" if os.path.isfile(path) else "folder"
                 except Exception:
-                    # If filesystem state can't be read (deleted), rely on recorded change type
                     item_type = "file" if change_type == "added" or change_type == "modified" else "folder"
 
                 try:
-                    database_instance.record_file_event(
+                    database_adapter.record_file_event(
                         directory_path=monitored_root,
                         item_path=path,
                         item_hash=data.get('hash', ''),
@@ -623,16 +629,11 @@ class MonitorChanges:
                 except Exception as e:
                     print(f"Error saving change for {path}: {str(e)}")
 
-
-    def view_baseline(self, db_session=None):
+    def view_baseline(self):
         """View ALL baselines with datetime serialization support"""
         try:
-            if not db_session:
-                print("No database session provide.")
-                return
-            
-            database_instance = DatabaseOperation(db_session)
-            directories = database_instance.get_all_monitored_directories()
+            database_adapter = DjangoDatabaseAdapter()
+            directories = database_adapter.get_all_monitored_directories()
 
             if not directories:
                 print("No baseline data exists in database")
@@ -640,7 +641,7 @@ class MonitorChanges:
 
             for directory in directories:
                 print(f"\nBaseline for {directory}:")
-                baseline = database_instance.get_current_baseline(directory)
+                baseline = database_adapter.get_current_baseline(directory)
 
                 class DateTimeEncoder(json.JSONEncoder):
                     def default(self, o):
@@ -653,13 +654,10 @@ class MonitorChanges:
         except Exception as e:
             print(f"Error viewing baseline: {str(e)}")
 
-    def reset_baseline(self, auth_username: str, directories: list[str], db_session=None):
-        """Safely reset baseline for specified directories using SQLAlchemy ORM."""
-        if not db_session:
-            print("No database session provide.")
-            return
-
-        database_instance = DatabaseOperation(db_session)
+    def reset_baseline(self, auth_username: str, directories: list[str]):
+        """Safely reset baseline for specified directories."""
+        database_adapter = DjangoDatabaseAdapter()
+        
         for directory in directories:
             try:
                 dir_path = Path(directory)
@@ -667,8 +665,11 @@ class MonitorChanges:
                     print(f"Directory not found: {directory}")
                     continue
 
-                database_instance.delete_directory_records(directory)
-                self.fim_instance.tracking_directory(auth_username, directory, db_session)
+                # Delete existing records
+                database_adapter.delete_directory_records(directory)
+                
+                # Create new baseline
+                self.fim_instance.tracking_directory(auth_username, directory, None)
 
                 print(f"Reset baseline for {directory}")
 
@@ -694,6 +695,6 @@ class MonitorChanges:
                 for log_path in self.logs_dir.glob("FIM_*.log"):
                     print(f"\n=== Logs for {log_path.stem} ===")
                     with open(log_path, 'r', encoding='utf-8') as f:
-                        print(f.read())  # Show first 4KB per file [read(4096)]
+                        print(f.read())
         except Exception as e:
             print(f"Log viewing error: {str(e)}")
