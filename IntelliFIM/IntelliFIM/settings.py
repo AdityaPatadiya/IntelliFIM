@@ -37,6 +37,13 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'rest_framework',
+    'corsheaders',
+    'drf_yasg',
+    'django_filters',
+    'django_celery_results',
+    'django_celery_beat',
+    'fim',
 ]
 
 MIDDLEWARE = [
@@ -69,13 +76,39 @@ TEMPLATES = [
 WSGI_APPLICATION = 'IntelliFIM.wsgi.application'
 
 
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 50,
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+    ],
+}
+
+
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'fim_db',  # Your database name
+        'USER': 'your_mysql_username',  # Your MySQL username
+        'PASSWORD': 'your_mysql_password',  # Your MySQL password
+        'HOST': 'localhost',  # Or your MySQL server IP
+        'PORT': '3306',  # Default MySQL port
+        'OPTIONS': {
+            'charset': 'utf8mb4',
+            'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
+            'autocommit': True,
+        },
+        'CONN_MAX_AGE': 600,  # Connection pooling
+        'CONN_HEALTH_CHECKS': True,
     }
 }
 
@@ -97,6 +130,49 @@ AUTH_PASSWORD_VALIDATORS = [
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
+
+
+# Celery configurations
+CELERY_BROKER_URL = 'redis://localhost:6379/0'  # Redis as message broker
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/1'  # Redis for results
+CELERY_ACCEPT_CONTENT = ['application/json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+CELERY_ENABLE_UTC = True
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+
+CELERY_RESULT_EXPIRES = 3600  # 1 hour
+CELERY_RESULT_EXTENDED = True  # Store more metadata
+
+CELERY_TASK_DEFAULT_QUEUE = 'default'
+CELERY_TASK_QUEUES = {
+    'default': {
+        'exchange': 'default',
+        'routing_key': 'default',
+    },
+    'fim_monitor': {
+        'exchange': 'fim_monitor',
+        'routing_key': 'fim_monitor',
+    },
+    'fim_scans': {
+        'exchange': 'fim_scans',
+        'routing_key': 'fim_scans',
+    },
+    'fim_backup': {
+        'exchange': 'fim_backup',
+        'routing_key': 'fim_backup',
+    },
+}
+
+# Worker settings
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_WORKER_MAX_TASKS_PER_CHILD = 100
+CELERY_WORKER_SEND_TASK_EVENTS = True
+
+# Flower monitoring (optional)
+CELERY_FLOWER_PORT = 5555
+CELERY_FLOWER_URL_PREFIX = 'flower'
 
 
 # Internationalization
