@@ -1,6 +1,4 @@
 """
-IntelliFIM/settings.py
-----------------------
 Django settings with environment configuration
 """
 import os
@@ -24,7 +22,7 @@ else:
     load_dotenv(BASE_DIR / '.env.dev')
 
 # ==================== CORE SETTINGS ====================
-SECRET_KEY = os.getenv('SECRET_KEY', '')
+SECRET_KEY = os.getenv('SECRET_KEY')
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
 
@@ -282,16 +280,16 @@ CORS_ALLOW_HEADERS = [
 
 # ==================== FILE SETTINGS ====================
 # Static files (CSS, JavaScript, Images)
-STATIC_URL = '/static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
-STATICFILES_DIRS = [BASE_DIR / 'static']
+# STATIC_URL = '/static/'
+# STATIC_ROOT = BASE_DIR / 'staticfiles'
+# STATICFILES_DIRS = [BASE_DIR / 'static']
 
 # Media files
-MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+# MEDIA_URL = '/media/'
+# MEDIA_ROOT = BASE_DIR / 'media'
 
 # Static files serving in production
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+# STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # File upload settings
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10485760  # 10MB
