@@ -24,15 +24,11 @@ from .serializers import (
 from .tasks import (
     start_fim_monitoring_task,
     stop_fim_monitoring_task,
-    perform_manual_scan,
-    restore_file_task,
     reset_baseline_task,
     export_fim_report,
     calculate_baseline_for_directory,
-    perform_scheduled_scan
 )
 
-# Import your existing FIM module
 try:
     from .core.FIM import MonitorChanges
     fim_monitor = MonitorChanges()
