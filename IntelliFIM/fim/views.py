@@ -7,10 +7,17 @@ from django.db import transaction
 from django.utils import timezone
 from django.core.cache import cache
 from celery.result import AsyncResult
-from datetime import timedelta
-import os
+from datetime import timedelta, datetime
+from django.db.models.functions import ExtractHour, TruncDate
+from django.db.models import Count, Q
+from django.http import StreamingHttpResponse
 import json
+import asyncio
+import os
 from pathlib import Path
+import time
+
+
 
 from .models import Directory, FileMetadata, FIMLog, BackupRecord
 from .serializers import (
@@ -26,8 +33,8 @@ from .tasks import (
     stop_fim_monitoring_task,
     reset_baseline_task,
     export_fim_report,
-    calculate_baseline_for_directory,
 )
+from fim.core.fim_shared import event_queue
 
 try:
     from .core.FIM import MonitorChanges
@@ -40,6 +47,14 @@ except ImportError:
             self.observer = None
     
     fim_monitor = MockMonitorChanges()
+
+
+class DateTimeEncoder(json.JSONEncoder):
+    """Custom JSON encoder for datetime objects"""
+    def default(self, o):
+        if isinstance(o, datetime):
+            return o.isoformat()
+        return super().default(o)
 
 
 class IsAdminUser(permissions.BasePermission):
@@ -80,21 +95,21 @@ class TaskStatusView(APIView):
 class FIMAddPathView(APIView):
     """Add directory to monitor"""
     permission_classes = [permissions.IsAuthenticated, IsAdminUser]
-    
+
     def post(self, request):
         serializer = FIMAddPathRequestSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        
+
         try:
             directory_path = serializer.validated_data['directory']
             
             # Check if directory exists
-            if not os.path.exists(directory_path):
-                return Response(
-                    {"detail": f"Directory does not exist: {directory_path}"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            # if not os.path.exists(directory_path):
+            #     return Response(
+            #         {"detail": f"Directory does not exist: {directory_path}"},
+            #         status=status.HTTP_400_BAD_REQUEST
+            #     )
             
             # Check if already monitored
             if Directory.objects.filter(path=directory_path).exists():
@@ -580,18 +595,25 @@ class FIMStatisticsView(APIView):
             
             # Changes by day (last 30 days)
             thirty_days_ago = today - timedelta(days=30)
-            changes_by_day = FileMetadata.objects.filter(
-                detected_at__date__gte=thirty_days_ago
-            ).exclude(status='current').extra(
-                {'date': "date(detected_at)"}
-            ).values('date').annotate(count=Count('id')).order_by('date')
-            
+            changes_by_day = (
+                FileMetadata.objects
+                .exclude(status='current')
+                .annotate(date=TruncDate('detected_at'))
+                .values('date')
+                .annotate(count=Count('id'))
+                .order_by('date')
+            )
             changes_day_dict = {str(item['date']): item['count'] for item in changes_by_day}
             
             # Changes by hour
-            changes_by_hour = FileMetadata.objects.exclude(status='current').extra(
-                {'hour': "strftime('%H', detected_at)"}
-            ).values('hour').annotate(count=Count('id')).order_by('hour')
+            changes_by_hour = (
+                FileMetadata.objects
+                .exclude(status='current')
+                .annotate(hour=ExtractHour('detected_at'))
+                .values('hour')
+                .annotate(count=Count('id'))
+                .order_by('hour')
+            )
             
             changes_hour_dict = {item['hour']: item['count'] for item in changes_by_hour}
             
@@ -686,16 +708,24 @@ class FIMGetBaselineView(APIView):
             )
 
 
-class FIMStreamDebugView(APIView):
-    """Debug endpoint for SSE stream (placeholder for real-time events)"""
-    permission_classes = [permissions.IsAuthenticated]
-    
+class FIMStreamView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminUser]
+
     def get(self, request):
-        return Response({
-            "message": "SSE streaming not implemented in Django. Use polling or WebSocket.",
-            "suggestions": [
-                "Use Django Channels for real-time updates",
-                "Implement WebSocket endpoint",
-                "Use polling with /api/fim/changes/ endpoint"
-            ]
-        })
+        def event_stream():
+            yield ('data: {"status": "connected", "time": "%s"}\n\n' % timezone.now().isoformat()).encode('utf-8')
+            
+            while True:
+                if not event_queue.empty():
+                    event = event_queue.get()
+                    event_json = json.dumps(event, cls=DateTimeEncoder)
+                    yield f"data: {event_json}\n\n".encode('utf-8')
+                else:
+                    # Keep connection alive
+                    yield f"date: {json.dumps({'ping':timezone.now().isoformat()})}\n\n".encode('utf-8')
+                    time.sleep(10)
+
+        response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+        response['Cache-Control'] = 'no-cache'
+        response['X-Accel-Buffering'] = 'no'
+        return response

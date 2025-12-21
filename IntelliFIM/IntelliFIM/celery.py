@@ -9,7 +9,7 @@ from celery.schedules import crontab
 from django.conf import settings
 
 # Set the default Django settings module
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'project.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'IntelliFIM.settings')
 
 app = Celery('fim_project')
 
@@ -25,7 +25,7 @@ app.conf.beat_schedule = {
     # Keep cleanup task
     'cleanup-old-logs': {
         'task': 'fim.tasks.cleanup_old_data',
-        'schedule': crontab(hour=3, minute=0),
+        'schedule': crontab(hour="3", minute="0"),
     },
     # Keep health check
     'check-monitoring-health': {
