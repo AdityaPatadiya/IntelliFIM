@@ -24,8 +24,8 @@ urlpatterns = [
     path('logs/', views.FIMLogsView.as_view(), name='fim-logs'),
     path('baseline/', views.FIMGetBaselineView.as_view(), name='fim-baseline'),
     path('statistics/', views.FIMStatisticsView.as_view(), name='fim-statistics'),
-    path('stream-debug/', views.FIMStreamDebugView.as_view(), name='fim-stream-debug'),
-    
+    path('api/fim/stream/', views.FIMStreamView.as_view()),
+
     # Task management
     path('tasks/<str:task_id>/', views.TaskStatusView.as_view(), name='task-status'),
     
