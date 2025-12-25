@@ -198,57 +198,55 @@ const FileIntegrity = () => {
         try {
           console.log('Raw SSE event data:', event.data);
 
-          // Handle the SSE format: "data: {json}\n\n"
           let dataString = event.data;
+          console.log('SSE data string before processing:', dataString);
 
           if (dataString.startsWith('data: ')) {
-            dataString = dataString.substring(6);
-            dataString = dataString.trim();
-
-            const data = JSON.parse(dataString);
-            console.log('Parsed SSE event:', data);
-
-            const newEvent: RealTimeEvent = {
-              type: data.type,
-              path: data.path,
-              details: data.details || {},
-              receivedAt: new Date().toISOString(),
-              id: generateEventId()
-            };
-
-            setRealTimeEvents(prev => {
-              const updated = [newEvent, ...prev];
-              return updated.slice(0, realTimeLimit);
-            });
-
-            const eventType = data.type.charAt(0).toUpperCase() + data.type.slice(1);
-            toast.info(`${eventType}: ${data.path}`, {
-              duration: 3000,
-              icon: <AlertCircle className="h-4 w-4" />,
-            });
-
-          } else {
-            console.warn('Unexpected SSE format:', dataString);
+            dataString = dataString.substring(6).trim();
           }
+
+          const data = JSON.parse(dataString);
+          console.log('Parsed SSE event:', data);
+
+          // Handle special messages
+          if ('ping' in data) {
+            console.log('Ping received:', data.ping);
+            return;  // Ignore pings
+          }
+
+          if ('status' in data && data.status === 'connected') {
+            console.log('Connection confirmed:', data.time);
+            return;  // Ignore initial connected message
+          }
+
+          if ('error' in data) {
+            console.error('SSE error from server:', data.error);
+            toast.error(`Stream error: ${data.error}`);
+            return;
+          }
+
+          // Process as file change event
+          const newEvent: RealTimeEvent = {
+            type: data.type,
+            path: data.path,
+            details: data.details || {},
+            receivedAt: new Date().toISOString(),
+            id: generateEventId()
+          };
+
+          setRealTimeEvents(prev => {
+            const updated = [newEvent, ...prev];
+            return updated.slice(0, realTimeLimit);
+          });
+
+          const eventType = data.type.charAt(0).toUpperCase() + data.type.slice(1);
+          toast.info(`${eventType}: ${data.path}`, {
+            duration: 3000,
+            icon: <AlertCircle className="h-4 w-4" />,
+          });
 
         } catch (error) {
           console.error('Error parsing SSE event:', error, 'Raw data:', event.data);
-          try {
-            const data = JSON.parse(event.data.trim());
-            console.log('Parsed as raw JSON:', data);
-
-            const newEvent: RealTimeEvent = {
-              type: data.type,
-              path: data.path,
-              details: data.details || {},
-              receivedAt: new Date().toISOString(),
-              id: generateEventId()
-            };
-
-            setRealTimeEvents(prev => [newEvent, ...prev.slice(0, realTimeLimit - 1)]);
-          } catch (e) {
-            console.error('Failed to parse as raw JSON:', e);
-          }
         }
       };
 
@@ -276,6 +274,7 @@ const FileIntegrity = () => {
 
     } catch (error) {
       console.error('Failed to create EventSource:', error);
+      toast.error('Failed to connect to real-time stream');
     }
   };
 
@@ -1142,7 +1141,7 @@ const FileIntegrity = () => {
                       <Badge
                         variant="outline"
                         className={`capitalize ${selectedEvent.details.item_type === 'file' ? 'bg-blue-50 text-blue-700' :
-                            'bg-purple-50 text-purple-700'
+                          'bg-purple-50 text-purple-700'
                           }`}
                       >
                         {selectedEvent.details.item_type || 'unknown'}
