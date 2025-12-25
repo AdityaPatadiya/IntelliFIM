@@ -53,20 +53,21 @@ INSTALLED_APPS = [
     'accounts',
     'auditlogs',
     'channels',
+    'daphne',
     'fim',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',  # For static files
+    # 'whitenoise.middleware.WhiteNoiseMiddleware',  # For static files
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'auditlogs.middleware.AuditMiddleware',  # If you have audit middleware
+    # 'auditlogs.middleware.AuditMiddleware',
 ]
 
 ROOT_URLCONF = 'IntelliFIM.urls'
