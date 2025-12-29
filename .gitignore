@@ -4,6 +4,8 @@ Project_Flow.md
 data/models
 venv
 .env
+.env.dev
+.env.prod
 logs
 Dockerfile
 .dockerignore
