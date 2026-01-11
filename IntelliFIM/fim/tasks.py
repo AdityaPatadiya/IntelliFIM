@@ -1,27 +1,23 @@
 """
 Celery tasks for File Integrity Monitoring
 """
-from celery import shared_task, Task, group, chain
+from celery import shared_task, Task
 from celery.utils.log import get_task_logger
-from django.db import transaction, DatabaseError
+from django.db import transaction
 from django.utils import timezone
 from django.core.cache import cache
-from django.db.models import Count, Q, F
 import os
-import hashlib
 import json
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 import traceback
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 from .models import (
     Directory, FileMetadata, FIMLog, BackupRecord,
-    ExclusionPattern, FIMConfiguration
+    ExclusionPattern
 )
 
-# Import your existing FIM logic
 try:
     from .core.FIM import MonitorChanges
     from .core.django_adapters import DjangoDatabaseAdapter

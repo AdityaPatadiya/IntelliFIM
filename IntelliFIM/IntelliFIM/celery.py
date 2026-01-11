@@ -1,6 +1,4 @@
 """
-project/celery.py
------------------
 Celery configuration for Django FIM project
 """
 import os

@@ -1,6 +1,4 @@
 """
-fim/models.py
--------------
 Django models for File Integrity Monitoring
 """
 from django.db import models
@@ -27,16 +25,16 @@ class Directory(models.Model):
     @property
     def file_count(self):
         """Get count of files in directory"""
-        return self.files.filter(status='current').count()
+        return self.files.filter(status='current').count()  # type:ignore
     
     def get_file_count_display(self):
         """Admin display method"""
         return self.file_count
-    get_file_count_display.short_description = 'File Count'
+    get_file_count_display.short_description = 'File Count'  # type:ignore
     
     def last_change_time(self):
         """Get timestamp of last change"""
-        last_change = self.files.exclude(status='current').order_by('-detected_at').first()
+        last_change = self.files.exclude(status='current').order_by('-detected_at').first()  # type: ignore
         return last_change.detected_at if last_change else None
 
     class Meta:

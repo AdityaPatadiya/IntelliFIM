@@ -1,4 +1,3 @@
-# fim/admin.py
 from django.contrib import admin
 from .models import Directory, FileMetadata, FIMConfiguration, FIMLog, BackupRecord, ExclusionPattern
 

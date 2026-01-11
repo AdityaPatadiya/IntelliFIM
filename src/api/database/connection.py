@@ -1,6 +1,4 @@
 """
-connection.py
---------------
 Handles database connections for both authentication (auth_db)
 and File Integrity Monitoring (fim_db) databases using SQLAlchemy ORM.
 """

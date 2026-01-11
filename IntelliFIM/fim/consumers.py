@@ -1,4 +1,3 @@
-# fim/consumers.py
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from fim.core.fim_shared import event_queue

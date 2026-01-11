@@ -1,6 +1,4 @@
 """
-fim/serializers.py
-------------------
 Django REST Framework serializers for FIM API
 """
 from rest_framework import serializers

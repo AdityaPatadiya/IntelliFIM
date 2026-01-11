@@ -1,4 +1,3 @@
-# src/FIM/fim_shared.py
 """
 Shared components for FIM to avoid circular imports.
 Contains event queue and event loop reference.
