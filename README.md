@@ -1,6 +1,6 @@
 # IntelliFIM
 
-The File Integrity Monitor (FIM) is a CLI tool designed to monitor directories for changes, view and reset baseline data, view logs, and analyze log files for anomalies. It includes user authentication to ensure that only authorized users can access and use the tool. Additionally, it takes a backup of the monitored directories before starting the monitoring process.
+An AI-driven Intrusion Prevention System (IPS) integrated with File Integrity Monitoring (FIM) and Network Traffic Analysis that detects and prevents insider threats through real-time anomaly detection, context-aware analysis, and adaptive automated response using Explainable AI (XAI).
 
 ## Features
 
