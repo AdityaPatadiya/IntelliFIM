@@ -7,7 +7,6 @@ router.register(r'directories', views.DirectoryViewSet, basename='directory')
 router.register(r'files', views.FileMetadataViewSet, basename='filemetadata')
 
 urlpatterns = [
-    # Router URLs
     path('', include(router.urls)),
     
     # FIM Operations with Celery
