@@ -3,6 +3,7 @@ Django models for File Integrity Monitoring
 """
 from django.db import models
 from django.core.validators import MinLengthValidator
+from django.contrib.auth import get_user_model
 import uuid
 
 
@@ -258,11 +259,13 @@ class FIMConfiguration(models.Model):
         help_text="Comma-separated list of exclusion patterns"
     )
 
+    User = get_user_model()
+
     # Audit
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     created_by = models.ForeignKey(
-        'auth.User',  # Assuming you have a User model
+        User,  # Assuming you have a User model
         on_delete=models.SET_NULL,
         null=True,
         related_name='fim_configs'

@@ -19,8 +19,8 @@ from django.db import transaction
 from .django_adapters import DjangoDatabaseAdapter
 from .fim_utils import FIM_monitor
 from .fim_shared import event_queue, get_fim_loop
-from src.utils.backup import Backup
-from src.utils.thread_pool import thread_pool
+# from src.utils.backup import Backup
+# from src.utils.thread_pool import thread_pool
 
 
 class EventDeduplicator:

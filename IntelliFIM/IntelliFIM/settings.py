@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 import dj_database_url
 import sentry_sdk
 from sentry_sdk.integrations.django import DjangoIntegration
+from datetime import timedelta
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -32,6 +33,9 @@ if ENVIRONMENT == 'production':
 
 # Application definition
 INSTALLED_APPS = [
+    'daphne',
+    'channels',
+
     # Django apps
     'django.contrib.admin',
     'django.contrib.auth',
@@ -52,8 +56,6 @@ INSTALLED_APPS = [
     # Your apps
     'accounts',
     'auditlogs',
-    'channels',
-    'daphne',
     'fim',
 ]
 
@@ -117,8 +119,8 @@ DB_POOL_OPTIONS = {
 DATABASES = {
     'default': {
         'ENGINE': os.getenv('DB_ENGINE', 'django.db.backends.postgresql'),
-        'NAME': os.getenv('DB_NAME', 'fim_db'),
-        'USER': os.getenv('DB_USER', 'fim_user'),
+        'NAME': os.getenv('DB_NAME', 'fim_dev'),
+        'USER': os.getenv('DB_USER', 'fim_dev_user'),
         'PASSWORD': os.getenv('DB_PASSWORD', ''),
         'HOST': os.getenv('DB_HOST', 'localhost'),
         'PORT': os.getenv('DB_PORT', '5432'),
@@ -129,8 +131,8 @@ DATABASES = {
     },
     'auth_db': {
         'ENGINE': os.getenv('AUTH_DB_ENGINE', 'django.db.backends.postgresql'),
-        'NAME': os.getenv('AUTH_DB_NAME', 'auth_db'),
-        'USER': os.getenv('AUTH_DB_USER', 'fim_user'),
+        'NAME': os.getenv('AUTH_DB_NAME', 'auth_dev'),
+        'USER': os.getenv('AUTH_DB_USER', 'fim_dev_user'),
         'PASSWORD': os.getenv('AUTH_DB_PASSWORD', ''),
         'HOST': os.getenv('AUTH_DB_HOST', 'localhost'),
         'PORT': os.getenv('AUTH_DB_PORT', '5432'),
@@ -221,6 +223,22 @@ REST_FRAMEWORK = {
     }
 }
 
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': False,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'VERIFYING_KEY': None,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
+    'TOKEN_TYPE_CLAIM': 'token_type',
+}
+
 # Hide browsable API in production
 if ENVIRONMENT == 'production':
     REST_FRAMEWORK['DEFAULT_RENDERER_CLASSES'] = [
@@ -243,6 +261,8 @@ AUTH_PASSWORD_VALIDATORS = [
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
+
+AUTH_USER_MODEL = 'accounts.User'
 
 # Security headers
 if ENVIRONMENT == 'production':
