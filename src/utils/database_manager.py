@@ -1,4 +1,3 @@
-# src/utils/database_manager.py
 """
 Database session manager for thread-safe operations.
 """
