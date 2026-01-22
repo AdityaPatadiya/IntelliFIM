@@ -259,16 +259,13 @@ class FIMConfiguration(models.Model):
         help_text="Comma-separated list of exclusion patterns"
     )
 
-    User = get_user_model()
-
     # Audit
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    created_by = models.ForeignKey(
-        User,  # Assuming you have a User model
-        on_delete=models.SET_NULL,
+    created_by = models.IntegerField(
         null=True,
-        related_name='fim_configs'
+        blank=True,
+        help_text="User ID (stored as integer since users are in auth database)"
     )
 
     class Meta:

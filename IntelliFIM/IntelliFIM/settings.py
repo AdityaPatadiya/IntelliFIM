@@ -9,17 +9,14 @@ import sentry_sdk
 from sentry_sdk.integrations.django import DjangoIntegration
 from datetime import timedelta
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load environment variables
 ENV_FILE = os.getenv('ENV_FILE', '.env.dev')
 env_path = BASE_DIR / ENV_FILE
 
 if env_path.exists():
     load_dotenv(env_path)
 else:
-    # Load default .env
     load_dotenv(BASE_DIR / '.env.dev')
 
 # ==================== CORE SETTINGS ====================
