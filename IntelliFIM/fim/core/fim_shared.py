@@ -8,7 +8,6 @@ from typing import Optional
 # Create event queue for SSE
 event_queue = asyncio.Queue()
 
-# Will be set when FastAPI starts
 _fim_loop: Optional[asyncio.AbstractEventLoop] = None
 
 def set_fim_loop(loop: asyncio.AbstractEventLoop):
