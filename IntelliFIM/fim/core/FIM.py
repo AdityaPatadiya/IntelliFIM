@@ -22,6 +22,8 @@ from fim_utils import FIMMonitor
 from .fim_shared import event_queue, get_fim_loop
 from ..utils.backup import Backup
 from ..utils.thread_pool import thread_pool
+from fim.utils.django_logger import get_directory_logger, log_change, log_backup, fim_logger
+from fim.utils.logging_filters import set_current_user, clear_current_user
 
 try:
     from fim.models import FileMetadata, Directory, FIMLog
@@ -81,9 +83,12 @@ class FIMEventHandler(FileSystemEventHandler):
         self.directory_path = None
         self.is_active = True
         
+        # Set current user for logging
+        set_current_user(username)
+        
         self.database_adapter = DjangoDatabaseAdapter()
-
         self.fim_monitor = FIMMonitor(username=username)
+        self.logger = fim_logger.get_logger('fim.event_handler', username)
 
         self.hash_cache = {}
         self.cache_timeout = 5.0
@@ -146,23 +151,11 @@ class FIMEventHandler(FileSystemEventHandler):
             self.hash_cache[path] = (time.time(), current_hash)
             return current_hash
         except concurrent.futures.TimeoutError:
-            self._log_error(f"Hashing timeout for: {path}")
+            log_change('error', path, self.username, {'error': 'Hashing timeout'})
             return "TIMEOUT_ERROR"
         except Exception as e:
-            self._log_error(f"Hashing error for {path}: {str(e)}")
+            log_change('error', path, self.username, {'error': str(e)})
             return "HASH_ERROR"
-    
-    def _log_error(self, message):
-        """Log error using Django models"""
-        try:
-            FIMLog.objects.create(
-                log_type='system',
-                level='error',
-                message=message,
-                username=self.username
-            )
-        except Exception:
-            print(f"ERROR: {message}")
 
     def _should_backup(self, path):
         """Determine if backup should be created for this change."""
@@ -200,16 +193,18 @@ class FIMEventHandler(FileSystemEventHandler):
                 detected_at=timezone.now()
             )
             
-            FIMLog.objects.create(
-                log_type='change',
-                level='info',
-                message=f"File added: {_path}",
-                directory=directory,
-                username=self.username
-            )
+            # Use Django logger instead of direct FIMLog creation
+            log_change('addition', _path, self.username, {
+                'hash': current_hash,
+                'type': 'file' if is_file else 'directory',
+                'directory': dir_path
+            })
             
         except Exception as e:
-            self._log_error(f"Addition processing error for {_path}: {str(e)}")
+            log_change('error', _path, self.username, {
+                'error': str(e),
+                'operation': 'addition_processing'
+            })
 
     def on_created(self, event):
         try:
@@ -234,6 +229,12 @@ class FIMEventHandler(FileSystemEventHandler):
             if not event.is_directory and self._should_backup(_path):
                 for monitored_dir in self.parent.current_directories:
                     if str(_path).startswith(monitored_dir):
+                        # Log backup trigger
+                        log_backup('event_triggered', monitored_dir, self.username, 'triggered', {
+                            'trigger_file': _path,
+                            'event_type': 'creation'
+                        })
+                        
                         thread_pool.submit(
                             self.parent.backup_instance.create_backup,
                             monitored_dir, self.username
@@ -241,12 +242,12 @@ class FIMEventHandler(FileSystemEventHandler):
                         break
 
         except Exception as e:
-            self._log_error(f"Creation error: {str(e)}")
+            log_change('error', event.src_path if hasattr(event, 'src_path') else 'unknown', 
+                      self.username, {'error': f"Creation error: {str(e)}"})
 
     def _process_modification(self, _path, current_hash, is_file):
         """Process modification with Django ORM"""
         try:
-            # Get directory and file metadata
             dir_path = os.path.dirname(_path)
             file_name = os.path.basename(_path)
             
@@ -270,17 +271,18 @@ class FIMEventHandler(FileSystemEventHandler):
                 }
             )
             
-            # Log to FIMLog
-            FIMLog.objects.create(
-                log_type='change',
-                level='warning',
-                message=f"File modified: {_path}",
-                directory=directory,
-                username=self.username
-            )
+            # Use Django logger
+            log_change('modification', _path, self.username, {
+                'hash': current_hash,
+                'previous_hash': 'N/A' if created else 'unknown',
+                'directory': dir_path
+            })
             
         except Exception as e:
-            self._log_error(f"Modification processing error for {_path}: {str(e)}")
+            log_change('error', _path, self.username, {
+                'error': str(e),
+                'operation': 'modification_processing'
+            })
 
     def on_modified(self, event):
         try:
@@ -305,6 +307,12 @@ class FIMEventHandler(FileSystemEventHandler):
             if not event.is_directory and self._should_backup(_path):
                 for monitored_dir in self.parent.current_directories:
                     if str(_path).startswith(monitored_dir):
+                        # Log backup trigger
+                        log_backup('event_triggered', monitored_dir, self.username, 'triggered', {
+                            'trigger_file': _path,
+                            'event_type': 'modification'
+                        })
+                        
                         thread_pool.submit(
                             self.parent.backup_instance.create_backup,
                             monitored_dir, self.username
@@ -312,7 +320,8 @@ class FIMEventHandler(FileSystemEventHandler):
                         break
 
         except Exception as e:
-            self._log_error(f"Modification error: {str(e)}")
+            log_change('error', event.src_path if hasattr(event, 'src_path') else 'unknown', 
+                      self.username, {'error': f"Modification error: {str(e)}"})
 
     def _process_deletion(self, _path, is_file):
         """Process deletion with Django ORM."""
@@ -328,17 +337,17 @@ class FIMEventHandler(FileSystemEventHandler):
                     item_path=file_name
                 ).update(status='deleted', detected_at=timezone.now())
                 
-                # Log to FIMLog
-                FIMLog.objects.create(
-                    log_type='change',
-                    level='warning',
-                    message=f"File deleted: {_path}",
-                    directory=directory,
-                    username=self.username
-                )
+                # Use Django logger
+                log_change('deletion', _path, self.username, {
+                    'directory': dir_path,
+                    'type': 'file' if is_file else 'directory'
+                })
             
         except Exception as e:
-            self._log_error(f"Deletion processing error for {_path}: {str(e)}")
+            log_change('error', _path, self.username, {
+                'error': str(e),
+                'operation': 'deletion_processing'
+            })
 
     def on_deleted(self, event):
         try:
@@ -355,7 +364,8 @@ class FIMEventHandler(FileSystemEventHandler):
                 _path, is_file
             )
         except Exception as e:
-            self._log_error(f"Deletion error: {str(e)}")
+            log_change('error', event.src_path if hasattr(event, 'src_path') else 'unknown', 
+                      self.username, {'error': f"Deletion error: {str(e)}"})
 
 
 class MonitorChanges:
@@ -373,6 +383,9 @@ class MonitorChanges:
         self.backup_instance = Backup()
         self.fim_monitor = FIMMonitor()
         self.event_deduplicator = EventDeduplicator(window_seconds=0.5)
+        
+        # Logger
+        self.logger = fim_logger.get_logger('fim.monitor', 'system')
 
         self.reset_state()
 
@@ -422,7 +435,7 @@ class MonitorChanges:
                 try:
                     future.result(timeout=30.0)
                 except Exception as e:
-                    print(f"Warning: Failed to initialize baseline: {str(e)}") 
+                    self.logger.warning(f"Failed to initialize baseline: {str(e)}")
 
             for directory in self.current_directories:
                 if directory in excluded_files:
@@ -433,15 +446,26 @@ class MonitorChanges:
                 self.observer.schedule(event_handler, directory, recursive=True)
                 self.event_handlers.append(event_handler)
                 
-                FIMLog.objects.create(
+                # Use Django logger instead of direct FIMLog creation
+                fim_logger.log_to_database(
                     log_type='system',
                     level='info',
                     message=f"Starting monitoring for {directory}",
-                    username=auth_username
+                    username=auth_username,
+                    directory=directory
                 )
+                self.logger.info(f"Starting monitoring for {directory}")
 
             self.observer.start()
-            print(f"FIM monitoring started for {len(self.current_directories)} directories")
+            self.logger.info(f"FIM monitoring started for {len(self.current_directories)} directories")
+            
+            # Log to database
+            fim_logger.log_to_database(
+                log_type='system',
+                level='info',
+                message=f"FIM monitoring started for {len(self.current_directories)} directories",
+                username=auth_username
+            )
 
             # Start observer thread
             self.observer_thread = threading.Thread(
@@ -452,12 +476,13 @@ class MonitorChanges:
             self.observer_thread.start()
 
         except Exception as e:
-            FIMLog.objects.create(
+            fim_logger.log_to_database(
                 log_type='system',
                 level='error',
                 message=f"Monitoring error: {str(e)}",
                 username=auth_username
             )
+            self.logger.error(f"Monitoring error: {str(e)}")
             self.stop_monitoring()
             raise
 
@@ -472,7 +497,7 @@ class MonitorChanges:
                     self.observer.stop()
                     self.observer.join(timeout=5)
             except Exception as e:
-                print(f"Error stopping observer: {e}")
+                self.logger.error(f"Error stopping observer: {e}")
             finally:
                 self.observer = None
         
@@ -485,23 +510,43 @@ class MonitorChanges:
         
         # Log stop
         if self.auth_username:
-            FIMLog.objects.create(
+            fim_logger.log_to_database(
                 log_type='system',
                 level='info',
-                message=f"Monitoring stopped",
+                message="Monitoring stopped",
                 username=self.auth_username
             )
+            self.logger.info(f"Monitoring stopped for user {self.auth_username}")
 
     def _initialize_directory_baseline(self, directory, auth_username):
         """Initialize baseline for a directory (run in thread pool)."""
         try:
             baseline = self.fim_monitor.track_directory(directory, auth_username)
             
+            log_backup('initial', directory, auth_username, 'started', {
+                'directory': directory,
+                'baseline_count': len(baseline) if baseline else 0
+            })
+            
             self.backup_instance.create_backup(directory, auth_username)
             
-            print(f"Baseline initialized for {directory}")
+            fim_logger.log_to_database(
+                log_type='system',
+                level='info',
+                message=f"Baseline initialized for {directory}",
+                username=auth_username,
+                directory=directory
+            )
+            
         except Exception as e:
-            print(f"Failed to initialize baseline for {directory}: {str(e)}")
+            fim_logger.log_to_database(
+                log_type='system',
+                level='error',
+                message=f"Failed to initialize baseline for {directory}: {str(e)}",
+                username=auth_username,
+                directory=directory
+            )
+            self.logger.error(f"Failed to initialize baseline for {directory}: {str(e)}")
             traceback.print_exc()
 
     def _run_observer(self):
@@ -511,9 +556,9 @@ class MonitorChanges:
                 time.sleep(1)
 
         except KeyboardInterrupt:
-            print("\nShutting down FIM monitor...")
+            self.logger.info("Shutting down FIM monitor due to keyboard interrupt...")
         except Exception as e:
-            print(f"Observer thread error: {str(e)}")
+            self.logger.error(f"Observer thread error: {str(e)}")
         finally:
             self._cleanup()
 
@@ -527,7 +572,7 @@ class MonitorChanges:
             try:
                 dir_path = Path(directory)
                 if not dir_path.exists():
-                    print(f"Directory not found: {directory}")
+                    self.logger.warning(f"Directory not found: {directory}")
                     continue
 
                 dir_obj, created = Directory.objects.get_or_create(
@@ -539,10 +584,10 @@ class MonitorChanges:
                 
                 self.fim_monitor.track_directory(directory, auth_username)
                 
-                print(f"Reset baseline for {directory}")
+                self.logger.info(f"Reset baseline for {directory}")
                 
-                # Log reset
-                FIMLog.objects.create(
+                # Log reset using Django logger
+                fim_logger.log_to_database(
                     log_type='system',
                     level='info',
                     message=f"Baseline reset for {directory}",
@@ -551,7 +596,14 @@ class MonitorChanges:
                 )
 
             except Exception as e:
-                print(f"Failed resetting baseline for {directory}: {str(e)}")
+                self.logger.error(f"Failed resetting baseline for {directory}: {str(e)}")
+                fim_logger.log_to_database(
+                    log_type='system',
+                    level='error',
+                    message=f"Failed resetting baseline for {directory}: {str(e)}",
+                    username=auth_username,
+                    directory=directory
+                )
 
     def view_baseline(self, directory=None):
         """View baseline data from Django database."""
@@ -571,6 +623,7 @@ class MonitorChanges:
                         'type': file_meta.item_type
                     }
                 
+                self.logger.info(f"Baseline for {directory}: {len(baseline)} files")
                 print(f"\nBaseline for {directory}:")
                 print(json.dumps(baseline, indent=4, default=str))
             else:
@@ -582,9 +635,11 @@ class MonitorChanges:
                         status='current'
                     ).count()
                     
+                    self.logger.info(f"{dir_obj.path}: {baseline_files} files in baseline")
                     print(f"{dir_obj.path}: {baseline_files} files in baseline")
 
         except Exception as e:
+            self.logger.error(f"Error viewing baseline: {str(e)}")
             print(f"Error viewing baseline: {str(e)}")
 
     def view_logs(self, directory=None):
@@ -598,14 +653,20 @@ class MonitorChanges:
                     ).order_by('-timestamp')[:100]
                     
                     for log in logs:
-                        print(f"{log.timestamp} [{log.level}] {log.message}")
+                        log_line = f"{log.timestamp} [{log.level}] {log.message}"
+                        self.logger.debug(f"Viewing log: {log_line}")
+                        print(log_line)
                 else:
+                    self.logger.warning(f"No directory found: {directory}")
                     print(f"No directory found: {directory}")
             else:
                 logs = FIMLog.objects.all().order_by('-timestamp')[:50]
                 for log in logs:
                     dir_name = log.directory.path if log.directory else "System"
-                    print(f"{log.timestamp} [{log.level}] {dir_name}: {log.message}")
+                    log_line = f"{log.timestamp} [{log.level}] {dir_name}: {log.message}"
+                    self.logger.debug(f"Viewing log: {log_line}")
+                    print(log_line)
                     
         except Exception as e:
+            self.logger.error(f"Log viewing error: {str(e)}")
             print(f"Log viewing error: {str(e)}")

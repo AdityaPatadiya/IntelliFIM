@@ -11,39 +11,15 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 import traceback
+import threading
 from typing import List, Dict, Any
 
 from .models import (
     Directory, FileMetadata, FIMLog, BackupRecord,
     ExclusionPattern
 )
-
-try:
-    from .core.FIM import MonitorChanges
-    from .core.django_adapters import DjangoDatabaseAdapter
-    fim_monitor = MonitorChanges()
-    db_adapter = DjangoDatabaseAdapter()
-except ImportError as e:
-    print(f"Warning: Could not import FIM modules: {e}")
-    
-    class MockMonitorChanges:
-        def __init__(self):
-            self.current_directories = []
-            self.observer = None
-        
-        def monitor_changes(self, username, directories, excluded_files, db_session):
-            print(f"Mock: Would start monitoring {directories}")
-            self.current_directories = directories
-        
-        def stop_monitoring(self):
-            print("Mock: Stopping monitoring")
-            self.current_directories = []
-        
-        def reset_baseline(self, username, directories):
-            print(f"Mock: Resetting baseline for {directories}")
-    
-    fim_monitor = MockMonitorChanges()
-    db_adapter = None
+from .utils.django_logger import fim_logger, log_change, log_backup
+from .utils.logging_filters import set_current_user, clear_current_user
 
 logger = get_task_logger(__name__)
 
@@ -62,20 +38,47 @@ class BaseTaskWithRetry(Task):
         error_msg = f"Task {self.name} failed: {str(exc)}"
         logger.error(error_msg)
         
-        # Log to database
-        try:
-            FIMLog.objects.create(
-                log_type='system',
-                level='critical',
-                message=error_msg,
-                details={'task_id': task_id, 'traceback': traceback.format_exc()}
-            )
-        except Exception:
-            pass
+        # Log to database using Django logger
+        fim_logger.log_to_database(
+            log_type='system',
+            level='critical',
+            message=error_msg,
+            details={'task_id': task_id, 'traceback': traceback.format_exc()}
+        )
         
         # Clean up cache
         cache_key = f"task_{task_id}"
         cache.delete(cache_key)
+
+
+try:
+    from .core.FIM import MonitorChanges
+    from .core.django_adapters import DjangoDatabaseAdapter
+    fim_monitor = MonitorChanges()
+    db_adapter = DjangoDatabaseAdapter()
+except ImportError as e:
+    logger.warning(f"Could not import FIM modules: {e}")
+    
+    class MockMonitorChanges:
+        def __init__(self):
+            self.current_directories = []
+            self.observer = None
+        
+        def monitor_changes(self, username, directories, excluded_files=None):
+            logger.info(f"Mock: Would start monitoring {directories}")
+            self.current_directories = directories
+            set_current_user(username)
+        
+        def stop_monitoring(self):
+            logger.info("Mock: Stopping monitoring")
+            self.current_directories = []
+        
+        def reset_baseline(self, username, directories):
+            logger.info(f"Mock: Resetting baseline for {directories}")
+            set_current_user(username)
+    
+    fim_monitor = MockMonitorChanges()
+    db_adapter = None
 
 
 @shared_task(base=BaseTaskWithRetry, bind=True, queue='fim_monitor')
@@ -99,7 +102,8 @@ def start_fim_monitoring_task(self, user_id: int, username: str,
     cache_key = f"fim_task_{task_id}"
     
     try:
-        # Update task status
+        set_current_user(username)
+        
         cache.set(cache_key, {
             'status': 'initializing',
             'progress': 0,
@@ -108,7 +112,6 @@ def start_fim_monitoring_task(self, user_id: int, username: str,
             'directories': directories
         }, timeout=3600)
         
-        # Validate directories exist
         invalid_dirs = []
         for directory in directories:
             if not os.path.exists(directory):
@@ -117,7 +120,6 @@ def start_fim_monitoring_task(self, user_id: int, username: str,
         if invalid_dirs:
             raise ValueError(f"Directories do not exist: {invalid_dirs}")
         
-        # Check for overlapping directories
         active_dirs = fim_monitor.current_directories if hasattr(fim_monitor, 'current_directories') else []
         overlapping = set(directories) & set(active_dirs)
         if overlapping:
@@ -129,7 +131,6 @@ def start_fim_monitoring_task(self, user_id: int, username: str,
             'message': 'Creating directory records...'
         }, timeout=3600)
         
-        # Create/update directory records
         created_dirs = []
         with transaction.atomic():
             for directory in directories:
@@ -148,7 +149,6 @@ def start_fim_monitoring_task(self, user_id: int, username: str,
                     dir_obj.is_active = True
                     dir_obj.save()
         
-        # Update excluded patterns if provided
         if excluded_files:
             for directory in directories:
                 dir_obj = Directory.objects.get(path=os.path.normpath(directory))
@@ -166,25 +166,28 @@ def start_fim_monitoring_task(self, user_id: int, username: str,
             'message': 'Starting monitoring service...'
         }, timeout=3600)
         
-        # Start monitoring using your existing FIM logic
+        success_dirs = []
+        failed_dirs = []
+        
         try:
-            # Start the monitoring in a background thread
-            # Since your MonitorChanges.monitor_changes() is blocking,
-            # we'll run it in a separate thread
-            import threading
-            
             def run_monitoring():
                 try:
+                    set_current_user(username)
                     fim_monitor.monitor_changes(
                         username,
                         directories,
-                        excluded_files or [],
-                        None  # No SQLAlchemy session needed for Django
+                        excluded_files or []
                     )
                 except Exception as e:
+                    fim_logger.log_to_database(
+                        log_type='system',
+                        level='error',
+                        message=f"Monitoring thread error: {str(e)}",
+                        username=username,
+                        details={'error': str(e), 'traceback': traceback.format_exc()}
+                    )
                     logger.error(f"Monitoring error: {e}")
             
-            # Start monitoring thread
             monitor_thread = threading.Thread(
                 target=run_monitoring,
                 daemon=True,
@@ -198,19 +201,24 @@ def start_fim_monitoring_task(self, user_id: int, username: str,
         except Exception as e:
             failed_dirs = [{'directory': d, 'error': str(e)} for d in directories]
             success_dirs = []
+            fim_logger.log_to_database(
+                log_type='system',
+                level='error',
+                message=f"Failed to start monitoring: {str(e)}",
+                username=username,
+                details={'error': str(e), 'traceback': traceback.format_exc()}
+            )
             logger.error(f"Failed to start monitoring: {e}")
         
-        # Log success
-        for directory in directories:
-            FIMLog.objects.create(
+        for directory in success_dirs:
+            fim_logger.log_to_database(
                 log_type='scan',
                 level='info',
                 message=f"Started monitoring directory: {directory}",
-                directory=Directory.objects.get(path=os.path.normpath(directory)),
-                username=username
+                username=username,
+                directory=directory
             )
         
-        # Calculate baseline if first time (using your existing FIM logic)
         if created_dirs:
             for directory in created_dirs:
                 calculate_baseline_for_directory.delay(directory, username)
@@ -225,7 +233,19 @@ def start_fim_monitoring_task(self, user_id: int, username: str,
                 'failed_dirs': failed_dirs,
                 'created_dirs': created_dirs
             }
-        }, timeout=7200)  # Keep results for 2 hours
+        }, timeout=7200)
+        
+        fim_logger.log_to_database(
+            log_type='system',
+            level='info',
+            message=f"FIM monitoring task completed: {len(success_dirs)} directories started successfully",
+            username=username,
+            details={
+                'success_dirs': success_dirs,
+                'failed_dirs': failed_dirs,
+                'task_id': task_id
+            }
+        )
         
         return {
             'task_id': task_id,
@@ -237,6 +257,17 @@ def start_fim_monitoring_task(self, user_id: int, username: str,
         }
         
     except Exception as e:
+        fim_logger.log_to_database(
+            log_type='system',
+            level='error',
+            message=f"FIM monitoring task failed: {str(e)}",
+            username=username,
+            details={
+                'error': str(e),
+                'traceback': traceback.format_exc(),
+                'task_id': task_id
+            }
+        )
         logger.error(f"FIM monitoring task failed: {e}")
         
         cache.set(cache_key, {
@@ -262,6 +293,8 @@ def stop_fim_monitoring_task(self, username: str,
     cache_key = f"stop_task_{task_id}"
     
     try:
+        set_current_user(username)
+        
         cache.set(cache_key, {
             'status': 'processing',
             'progress': 0,
@@ -274,12 +307,10 @@ def stop_fim_monitoring_task(self, username: str,
         
         for directory in directories:
             try:
-                # Update in-memory directories list
                 if (hasattr(fim_monitor, "current_directories") and 
                     directory in fim_monitor.current_directories):
                     fim_monitor.current_directories.remove(directory)
                     
-                    # Update database
                     if remove_from_db:
                         Directory.objects.filter(path=directory).delete()
                     else:
@@ -290,26 +321,53 @@ def stop_fim_monitoring_task(self, username: str,
                     
                     stopped_dirs.append(directory)
                     
-                    # Log
-                    FIMLog.objects.create(
+                    fim_logger.log_to_database(
                         log_type='scan',
                         level='info',
                         message=f"Stopped monitoring directory: {directory}",
-                        username=username
+                        username=username,
+                        directory=directory
                     )
                 else:
                     error_dirs.append({'directory': directory, 'error': 'Not actively monitored'})
+                    fim_logger.log_to_database(
+                        log_type='system',
+                        level='warning',
+                        message=f"Directory not actively monitored: {directory}",
+                        username=username,
+                        directory=directory
+                    )
                     
             except Exception as e:
                 error_dirs.append({'directory': directory, 'error': str(e)})
+                fim_logger.log_to_database(
+                    log_type='system',
+                    level='error',
+                    message=f"Error stopping directory {directory}: {str(e)}",
+                    username=username,
+                    directory=directory,
+                    details={'error': str(e)}
+                )
                 logger.error(f"Error stopping {directory}: {e}")
         
-        # Stop the observer if no directories left
         if (hasattr(fim_monitor, "current_directories") and 
             len(fim_monitor.current_directories) == 0):
             try:
                 fim_monitor.stop_monitoring()
+                fim_logger.log_to_database(
+                    log_type='system',
+                    level='info',
+                    message="FIM monitor stopped completely",
+                    username=username
+                )
             except Exception as e:
+                fim_logger.log_to_database(
+                    log_type='system',
+                    level='error',
+                    message=f"Error stopping observer: {str(e)}",
+                    username=username,
+                    details={'error': str(e)}
+                )
                 logger.error(f"Error stopping observer: {e}")
         
         cache.set(cache_key, {
@@ -322,6 +380,18 @@ def stop_fim_monitoring_task(self, username: str,
                 'error_dirs': error_dirs
             }
         }, timeout=7200)
+
+        fim_logger.log_to_database(
+            log_type='system',
+            level='info',
+            message=f"Stop monitoring task completed: {len(stopped_dirs)} directories stopped",
+            username=username,
+            details={
+                'stopped_dirs': stopped_dirs,
+                'error_dirs': error_dirs,
+                'task_id': task_id
+            }
+        )
         
         return {
             'task_id': task_id,
@@ -331,6 +401,17 @@ def stop_fim_monitoring_task(self, username: str,
         }
         
     except Exception as e:
+        fim_logger.log_to_database(
+            log_type='system',
+            level='error',
+            message=f"Stop monitoring task failed: {str(e)}",
+            username=username,
+            details={
+                'error': str(e),
+                'traceback': traceback.format_exc(),
+                'task_id': task_id
+            }
+        )
         logger.error(f"Stop monitoring task failed: {e}")
         
         cache.set(cache_key, {
@@ -341,7 +422,8 @@ def stop_fim_monitoring_task(self, username: str,
         
         raise
 
-@shared_task(base=BaseTaskWithRetry, bind=True)
+
+@shared_task(base=BaseTaskWithRetry, bind=True, queue='fim_monitor')
 def reset_baseline_task(self, username: str, directories: List[str]) -> Dict[str, Any]:
     """
     Reset baseline for directories using your existing FIM logic
@@ -350,6 +432,8 @@ def reset_baseline_task(self, username: str, directories: List[str]) -> Dict[str
     cache_key = f"baseline_task_{task_id}"
     
     try:
+        set_current_user(username)
+        
         total_dirs = len(directories)
         
         cache.set(cache_key, {
@@ -373,33 +457,30 @@ def reset_baseline_task(self, username: str, directories: List[str]) -> Dict[str
                     'processed': idx + 1
                 }, timeout=3600)
                 
-                # Reset baseline using your existing FIM logic
                 fim_monitor.reset_baseline(username, [directory])
-                
-                # Update directory
+
                 dir_obj = Directory.objects.get(path=directory)
                 dir_obj.last_scan = timezone.now()
                 dir_obj.save()
-                
-                # Count baseline files
+
                 baseline_count = FileMetadata.objects.filter(
                     directory=dir_obj,
                     status='current'
                 ).count()
-                
+
                 results.append({
                     'directory': directory,
                     'success': True,
                     'baseline_count': baseline_count
                 })
-                
-                # Log
-                FIMLog.objects.create(
+
+                fim_logger.log_to_database(
                     log_type='system',
                     level='info',
                     message=f"Baseline reset for {directory}: {baseline_count} files in baseline",
-                    directory=dir_obj,
-                    username=username
+                    username=username,
+                    directory=directory,
+                    details={'baseline_count': baseline_count}
                 )
                 
             except Exception as e:
@@ -408,6 +489,14 @@ def reset_baseline_task(self, username: str, directories: List[str]) -> Dict[str
                     'success': False,
                     'error': str(e)
                 })
+                fim_logger.log_to_database(
+                    log_type='system',
+                    level='error',
+                    message=f"Baseline reset failed for {directory}: {str(e)}",
+                    username=username,
+                    directory=directory,
+                    details={'error': str(e)}
+                )
                 logger.error(f"Baseline reset failed for {directory}: {e}")
         
         cache.set(cache_key, {
@@ -418,6 +507,15 @@ def reset_baseline_task(self, username: str, directories: List[str]) -> Dict[str
             'results': results
         }, timeout=7200)
         
+        successful = sum(1 for r in results if r['success'])
+        fim_logger.log_to_database(
+            log_type='system',
+            level='info',
+            message=f"Baseline reset task completed: {successful}/{total_dirs} successful",
+            username=username,
+            details={'results': results, 'task_id': task_id}
+        )
+        
         return {
             'task_id': task_id,
             'results': results,
@@ -425,6 +523,17 @@ def reset_baseline_task(self, username: str, directories: List[str]) -> Dict[str
         }
         
     except Exception as e:
+        fim_logger.log_to_database(
+            log_type='system',
+            level='error',
+            message=f"Baseline reset task failed: {str(e)}",
+            username=username,
+            details={
+                'error': str(e),
+                'traceback': traceback.format_exc(),
+                'task_id': task_id
+            }
+        )
         logger.error(f"Baseline reset task failed: {e}")
         
         cache.set(cache_key, {
@@ -437,28 +546,28 @@ def reset_baseline_task(self, username: str, directories: List[str]) -> Dict[str
 
 
 @shared_task(base=BaseTaskWithRetry, queue='default')
-def calculate_baseline_for_directory(directory_path: str, username: str = 'system'):
+def calculate_baseline_for_directory(directory_path: str, username: str = 'system') -> Dict[str, Any]:
     """
     Calculate baseline for a single directory using your existing FIM logic
     """
     try:
-        # This would use your existing FIM logic
-        # For now, we'll just update the directory last_scan
+        set_current_user(username)
+        
         dir_obj = Directory.objects.get(path=directory_path)
         dir_obj.last_scan = timezone.now()
         dir_obj.save()
         
-        # Count baseline files
         baseline_count = FileMetadata.objects.filter(
             directory=dir_obj,
             status='current'
         ).count()
         
-        FIMLog.objects.create(
+        fim_logger.log_to_database(
             log_type='scan',
             level='info',
             message=f"Baseline calculated for {directory_path}: {baseline_count} files",
             username=username,
+            directory=directory_path,
             details={'file_count': baseline_count}
         )
         
@@ -469,19 +578,26 @@ def calculate_baseline_for_directory(directory_path: str, username: str = 'syste
         }
         
     except Exception as e:
+        fim_logger.log_to_database(
+            log_type='system',
+            level='error',
+            message=f"Baseline calculation failed for {directory_path}: {str(e)}",
+            username=username,
+            directory=directory_path,
+            details={'error': str(e)}
+        )
         logger.error(f"Baseline calculation failed for {directory_path}: {e}")
         raise
 
 
 @shared_task(base=BaseTaskWithRetry, queue='default')
-def cleanup_old_data(days_to_keep: int = 30):
+def cleanup_old_data(days_to_keep: int = 30) -> Dict[str, Any]:
     """
     Cleanup old FIM data
     """
     try:
         cutoff_date = timezone.now() - timedelta(days=days_to_keep)
         
-        # Archive and delete old change records (keep only current baseline)
         old_changes = FileMetadata.objects.filter(
             status__in=['added', 'modified', 'deleted'],
             detected_at__lt=cutoff_date
@@ -489,7 +605,6 @@ def cleanup_old_data(days_to_keep: int = 30):
         
         old_count = old_changes.count()
         
-        # Archive to log file before deletion
         if old_count > 0:
             archive_file = Path(f"logs/archive_changes_{datetime.now().strftime('%Y%m%d')}.log")
             with open(archive_file, 'a') as f:
@@ -503,30 +618,30 @@ def cleanup_old_data(days_to_keep: int = 30):
                         'hash': change.hash
                     }) + '\n')
         
-        # Delete old changes
         deleted_count, _ = old_changes.delete()
         
-        # Delete old logs
         old_logs = FIMLog.objects.filter(timestamp__lt=cutoff_date)
         logs_deleted = old_logs.count()
         old_logs.delete()
         
-        # Delete expired backups
         expired_backups = BackupRecord.objects.filter(
             expires_at__lt=timezone.now(),
-            restored=True  # Only delete restored backups
+            restored=True
         )
         backups_deleted = expired_backups.count()
         expired_backups.delete()
         
-        # Log cleanup
-        FIMLog.objects.create(
+        fim_logger.log_to_database(
             log_type='system',
             level='info',
-            message=f"Data cleanup completed: "
-                   f"{deleted_count} old changes, "
-                   f"{logs_deleted} old logs, "
-                   f"{backups_deleted} expired backups removed"
+            message=f"Data cleanup completed: {deleted_count} old changes, {logs_deleted} old logs, {backups_deleted} expired backups removed",
+            username='system',
+            details={
+                'changes_deleted': deleted_count,
+                'logs_deleted': logs_deleted,
+                'backups_deleted': backups_deleted,
+                'cutoff_date': cutoff_date.isoformat()
+            }
         )
         
         return {
@@ -537,16 +652,25 @@ def cleanup_old_data(days_to_keep: int = 30):
         }
         
     except Exception as e:
+        fim_logger.log_to_database(
+            log_type='system',
+            level='error',
+            message=f"Data cleanup failed: {str(e)}",
+            username='system',
+            details={'error': str(e)}
+        )
         logger.error(f"Data cleanup failed: {e}")
         raise
 
 
 @shared_task(base=BaseTaskWithRetry, queue='default')
-def check_monitoring_health():
+def check_monitoring_health() -> Dict[str, Any]:
     """
     Check health of all monitoring tasks
     """
     try:
+        set_current_user('system')
+        
         health_report = {
             'observer_running': hasattr(fim_monitor, 'observer') and 
                                fim_monitor.observer is not None and 
@@ -564,18 +688,33 @@ def check_monitoring_health():
                 f"but monitor has {health_report['monitored_directories_count']}"
             )
         
-        # Log if there are issues
         if health_report['issues']:
-            FIMLog.objects.create(
+            fim_logger.log_to_database(
                 log_type='system',
                 level='warning',
                 message=f"Monitoring health check found {len(health_report['issues'])} issues",
+                username='system',
+                details=health_report
+            )
+        else:
+            fim_logger.log_to_database(
+                log_type='system',
+                level='info',
+                message="Monitoring health check passed",
+                username='system',
                 details=health_report
             )
         
         return health_report
         
     except Exception as e:
+        fim_logger.log_to_database(
+            log_type='system',
+            level='error',
+            message=f"Health check failed: {str(e)}",
+            username='system',
+            details={'error': str(e)}
+        )
         logger.error(f"Health check failed: {e}")
         raise
 
@@ -587,6 +726,8 @@ def export_fim_report(start_date: str, end_date: str,
     Export FIM report for given date range
     """
     try:
+        set_current_user('system')
+        
         start = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
         end = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
         
@@ -618,6 +759,19 @@ def export_fim_report(start_date: str, end_date: str,
                     'changes': report_data
                 }, f, indent=2)
             
+            # Log report generation
+            fim_logger.log_to_database(
+                log_type='report',
+                level='info',
+                message=f"FIM report generated: {report_path}",
+                username='system',
+                details={
+                    'report_path': report_path,
+                    'total_changes': len(report_data),
+                    'period': {'start': start_date, 'end': end_date}
+                }
+            )
+            
             return {
                 'success': True,
                 'report_path': report_path,
@@ -625,38 +779,65 @@ def export_fim_report(start_date: str, end_date: str,
                 'period': {'start': start_date, 'end': end_date}
             }
         
+        fim_logger.log_to_database(
+            log_type='system',
+            level='error',
+            message=f"Invalid report type requested: {report_type}",
+            username='system',
+            details={'report_type': report_type}
+        )
         return {'success': False, 'error': 'Invalid report type'}
         
     except Exception as e:
+        fim_logger.log_to_database(
+            log_type='system',
+            level='error',
+            message=f"Report export failed: {str(e)}",
+            username='system',
+            details={'error': str(e)}
+        )
         logger.error(f"Report export failed: {e}")
         raise
 
 
 @shared_task(queue='default')
-def notify_on_changes(change_data: Dict[str, Any]):
+def notify_on_changes(change_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Send notifications about detected changes
     """
     try:
-        # This is where you'd integrate with email, Slack, webhooks, etc.
-        # For now, just log it
+        username = change_data.get('username', 'system')
+        set_current_user(username)
         
-        FIMLog.objects.create(
+        fim_logger.log_to_database(
             log_type='alert',
             level='info',
-            message=f"Change detected: {change_data.get('file_path')} "
-                   f"({change_data.get('change_type')})",
+            message=f"Change detected: {change_data.get('file_path')} ({change_data.get('change_type')})",
+            username=username,
             details=change_data
         )
+        
+        if 'file_path' in change_data and 'change_type' in change_data:
+            log_change(
+                change_data.get('change_type'),
+                change_data.get('file_path'),
+                username,
+                change_data
+            )
         
         return {'notified': True, 'change_id': change_data.get('change_id')}
         
     except Exception as e:
+        fim_logger.log_to_database(
+            log_type='system',
+            level='error',
+            message=f"Notification failed: {str(e)}",
+            username=change_data.get('username', 'system'),
+            details={'error': str(e), 'change_data': change_data}
+        )
         logger.error(f"Notification failed: {e}")
         raise
 
-
-# Simple task implementations that don't depend on FimMonitorService
 
 @shared_task(base=BaseTaskWithRetry, queue='fim_scans')
 def perform_directory_scan(directory_path: str, username: str = 'system') -> Dict[str, Any]:
@@ -664,26 +845,26 @@ def perform_directory_scan(directory_path: str, username: str = 'system') -> Dic
     Perform a simple directory scan using Django ORM
     """
     try:
+        set_current_user(username)
+        
         dir_obj = Directory.objects.get(path=directory_path)
         
-        # Get current baseline
         baseline_files = FileMetadata.objects.filter(
             directory=dir_obj,
             status='current'
         )
         
         baseline_count = baseline_files.count()
-        
-        # Update last scan time
+
         dir_obj.last_scan = timezone.now()
         dir_obj.save()
         
-        FIMLog.objects.create(
+        fim_logger.log_to_database(
             log_type='scan',
             level='info',
             message=f"Directory scan completed for {directory_path}: {baseline_count} files",
-            directory=dir_obj,
             username=username,
+            directory=dir_obj,
             details={'file_count': baseline_count}
         )
         
@@ -695,6 +876,14 @@ def perform_directory_scan(directory_path: str, username: str = 'system') -> Dic
         }
         
     except Exception as e:
+        fim_logger.log_to_database(
+            log_type='system',
+            level='error',
+            message=f"Directory scan failed for {directory_path}: {str(e)}",
+            username=username,
+            directory=directory_path,
+            details={'error': str(e)}
+        )
         logger.error(f"Directory scan failed for {directory_path}: {e}")
         raise
 
@@ -705,10 +894,9 @@ def simple_restore_task(username: str, path_to_restore: str) -> Dict[str, Any]:
     Simple restore task placeholder
     """
     try:
-        # This is a placeholder - you should implement your restore logic here
-        # For now, just log it
-
-        FIMLog.objects.create(
+        set_current_user(username)
+        
+        fim_logger.log_to_database(
             log_type='restore',
             level='info',
             message=f"Restore requested for: {path_to_restore}",
@@ -724,5 +912,12 @@ def simple_restore_task(username: str, path_to_restore: str) -> Dict[str, Any]:
         }
         
     except Exception as e:
+        fim_logger.log_to_database(
+            log_type='system',
+            level='error',
+            message=f"Restore task failed: {str(e)}",
+            username=username,
+            details={'error': str(e), 'path': path_to_restore}
+        )
         logger.error(f"Restore task failed: {e}")
         raise

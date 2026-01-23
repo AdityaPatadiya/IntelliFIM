@@ -112,6 +112,74 @@ DB_POOL_OPTIONS = {
     'pool_timeout': int(os.getenv('DB_POOL_TIMEOUT', 30)),
 }
 
+# LOGGING CONFIGURATION
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+
+    'formatters': {
+        'fim_detailed': {
+            'format': '%(asctime)s | %(levelname)s | %(username)s | %(message)s',
+            'datefmt': '%Y-%m-%d %H:%M:%S',
+        },
+        'fim_simple': {
+            'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        },
+    },
+
+    'filters': {
+        'username_filter': {
+            '()': 'fim.utils.logging_filters.UsernameFilter',
+        },
+    },
+
+    'handlers': {
+        'fim_file': {
+            'level': 'INFO',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', 'fim.log'),
+            'maxBytes': 10485760,  # 10MB
+            'backupCount': 10,
+            'formatter': 'fim_detailed',
+            'encoding': 'utf-8',
+            'filters': ['username_filter'],
+        },
+        'fim_directory_file': {
+            'level': 'INFO',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', 'fim_directories.log'),
+            'maxBytes': 10485760,
+            'backupCount': 10,
+            'formatter': 'fim_detailed',
+            'encoding': 'utf-8',
+            'filters': ['username_filter'],
+        },
+        'console': {
+            'level': 'INFO',
+            'class': 'logging.StreamHandler',
+            'formatter': 'fim_simple',
+        },
+    },
+
+    'loggers': {
+        'fim': {
+            'handlers': ['fim_file', 'console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'fim.directory': {
+            'handlers': ['fim_directory_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'fim.backup': {
+            'handlers': ['fim_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
+
 # Main database (default)
 DATABASES = {
     'default': {
