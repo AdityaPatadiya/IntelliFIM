@@ -20,13 +20,15 @@ else:
     load_dotenv(BASE_DIR / '.env.dev')
 
 # ==================== CORE SETTINGS ====================
-SECRET_KEY = os.getenv('SECRET_KEY')
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 if ENVIRONMENT == 'production':
     ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(',')
+
+JWT_SECRET_KEY = os.getenv('SECRET_KEY')
 
 # Application definition
 INSTALLED_APPS = [
@@ -295,7 +297,7 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': False,
     'BLACKLIST_AFTER_ROTATION': True,
     'ALGORITHM': 'HS256',
-    'SIGNING_KEY': SECRET_KEY,
+    'SIGNING_KEY': JWT_SECRET_KEY,
     'VERIFYING_KEY': None,
     'AUTH_HEADER_TYPES': ('Bearer',),
     'USER_ID_FIELD': 'id',
