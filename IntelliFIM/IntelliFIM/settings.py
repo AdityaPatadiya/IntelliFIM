@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'accounts',
     'auditlogs',
     'fim',
+    'NTA',
 ]
 
 MIDDLEWARE = [

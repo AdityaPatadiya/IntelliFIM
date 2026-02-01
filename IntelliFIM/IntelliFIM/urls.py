@@ -22,5 +22,6 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('accounts.urls')),
     path('api/token/verify/', TokenVerifyView.as_view(), name='token_verify'),
-    path('api/', include('fim.urls')),
+    path('api/fim/', include('fim.urls')),
+    path('api/network/', include('NTA.urls')),
 ]

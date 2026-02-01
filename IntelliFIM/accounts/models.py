@@ -18,6 +18,7 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_admin', True)
         extra_fields.setdefault('is_active', True)
+        extra_fields.setdefault('role', 'admin')
 
         if extra_fields.get('is_staff') is not True:
             raise ValueError('Superuser must have is_staff=True.')
@@ -28,8 +29,19 @@ class UserManager(BaseUserManager):
 
 
 class User(AbstractBaseUser, PermissionsMixin):
+    ROLE_CHOICES = [
+        ('admin', 'Admin'),
+        ('analyst', 'Analyst'),
+        ('user', 'Regular User'),
+    ]
+    
     username = models.CharField(max_length=50, unique=True)
     email = models.EmailField(max_length=100, unique=True)
+    role = models.CharField(
+        max_length=20,
+        choices=ROLE_CHOICES,
+        default='user'
+    )
     is_admin = models.BooleanField(default=False)
     is_staff = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
@@ -44,10 +56,18 @@ class User(AbstractBaseUser, PermissionsMixin):
         db_table = 'users'
 
     def __str__(self):
-        return f"{self.username} ({self.email})"
+        return f"{self.username} ({self.email}) - {self.role}"
 
     def has_perm(self, perm, obj=None):
         return True
 
     def has_module_perms(self, app_label):
         return True
+
+    def save(self, *args, **kwargs):
+        # Keep is_admin in sync with role for backward compatibility
+        if self.role == 'admin':
+            self.is_admin = True
+        else:
+            self.is_admin = False
+        super().save(*args, **kwargs)

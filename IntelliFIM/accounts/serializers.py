@@ -10,10 +10,11 @@ logger = logging.getLogger(__name__)
 class UserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
     password2 = serializers.CharField(write_only=True, required=True)
+    role = serializers.ChoiceField(choices=User.ROLE_CHOICES, default='user')
 
     class Meta:
         model = User
-        fields = ('username', 'email', 'password', 'password2', 'is_admin')
+        fields = ('username', 'email', 'password', 'password2', 'role', 'is_admin')
 
     def validate(self, attrs):
         if attrs['password'] != attrs['password2']:
@@ -48,7 +49,7 @@ class UserLoginSerializer(serializers.Serializer):
         if not user.is_active:
             raise serializers.ValidationError("Account is disabled.")
 
-        logger.info(f"Login successful - User: {user.username}, Admin: {user.is_admin}")
+        logger.info(f"Login successful - User: {user.username}, Role: {user.role}")
 
         attrs['user'] = user
         return attrs
@@ -57,5 +58,5 @@ class UserLoginSerializer(serializers.Serializer):
 class UserResponseSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'is_admin')
+        fields = ('id', 'username', 'email', 'role', 'is_admin')
         read_only_fields = fields
