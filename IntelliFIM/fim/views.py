@@ -10,7 +10,13 @@ from celery.result import AsyncResult
 from datetime import timedelta, datetime
 from django.db.models.functions import ExtractHour, TruncDate
 from django.db.models import Count, Q
-from django.http import StreamingHttpResponse
+from django.http import StreamingHttpResponse, HttpResponse
+from django.views import View
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+from asgiref.sync import sync_to_async
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 import json
 import asyncio
 import os
@@ -333,20 +339,18 @@ class FIMStatusView(APIView):
     
     def get(self, request):
         try:
-            # Get monitoring status from your existing MonitorChanges instance
-            is_monitoring = (
-                hasattr(fim_monitor, 'observer') and
-                fim_monitor.observer is not None and
-                fim_monitor.observer.is_alive()
+            # `fim_monitor` is a per-process singleton. The watchdog observer
+            # actually lives in the Celery worker process, so checking the
+            # observer here (in the runserver/Daphne process) always says
+            # "not monitoring". Source of truth is the DB instead — the worker
+            # flips Directory.is_active on Start/Stop.
+            active_directories = list(
+                Directory.objects.filter(is_active=True).values_list('path', flat=True)
             )
-            
+            is_monitoring = bool(active_directories)
+
             # Get all directories from database
             all_directories = list(Directory.objects.values_list('path', flat=True))
-            
-            # Get active directories
-            active_directories = []
-            if hasattr(fim_monitor, "current_directories"):
-                active_directories = fim_monitor.current_directories
             
             # Statistics
             total_files = FileMetadata.objects.filter(status='current').count()
@@ -708,22 +712,98 @@ class FIMGetBaselineView(APIView):
             )
 
 
-class FIMStreamView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsAdminUser]
+def _authenticate_sse_request(request):
+    """Authenticate an SSE/EventSource request.
 
-    def get(self, request):
-        def event_stream():
+    Browser-native EventSource can't set custom headers, so it can't send
+    `Authorization: Bearer ...`. We accept the JWT via `?token=<access>` query
+    param as a fallback. Header is still preferred when callers can set it
+    (curl, integration tests).
+
+    Returns the User on success, None on failure.
+    """
+    auth = JWTAuthentication()
+    raw_token = None
+
+    header = auth.get_header(request)
+    if header is not None:
+        raw_token = auth.get_raw_token(header)
+
+    if raw_token is None:
+        token_param = request.GET.get('token')
+        if token_param:
+            raw_token = token_param.encode()
+
+    if not raw_token:
+        return None
+
+    try:
+        validated_token = auth.get_validated_token(raw_token)
+        return auth.get_user(validated_token)
+    except (InvalidToken, TokenError):
+        return None
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class FIMStreamView(View):
+    """Server-Sent Events stream of file change events.
+
+    Async view so each connection runs on the asyncio event loop instead of
+    occupying a sync worker thread. The previous sync version held one thread
+    per open connection (blocking on time.sleep), which exhausted Daphne's
+    sync worker pool and made all other requests pend.
+
+    Not a DRF APIView: DRF's content negotiation rejects `Accept: text/event-stream`
+    with 406 before reaching the handler. Plain Django View bypasses that.
+    """
+
+    async def get(self, request):
+        # JWT validation hits the DB (user lookup), so it must run in a thread.
+        user = await sync_to_async(_authenticate_sse_request, thread_sensitive=False)(request)
+        if user is None:
+            return HttpResponse('Unauthorized', status=401)
+        if not getattr(user, 'is_admin', False):
+            return HttpResponse('Forbidden', status=403)
+
+        async def event_stream():
+            # Subscribe to the cross-process Redis channel that the worker
+            # publishes file-change events to. Polling fim_shared.event_queue
+            # (the previous design) only saw events from the same process,
+            # so the runserver-side stream stayed empty forever.
+            import redis.asyncio as aioredis
+            from fim.utils.realtime import REDIS_EVENTS_URL, EVENTS_CHANNEL
+
             yield ('data: {"status": "connected", "time": "%s"}\n\n' % timezone.now().isoformat()).encode('utf-8')
-            
-            while True:
-                if not event_queue.empty():
-                    event = event_queue.get()
-                    event_json = json.dumps(event, cls=DateTimeEncoder)
-                    yield f"data: {event_json}\n\n".encode('utf-8')
-                else:
-                    # Keep connection alive
-                    yield f"date: {json.dumps({'ping':timezone.now().isoformat()})}\n\n".encode('utf-8')
-                    time.sleep(10)
+
+            redis_client = aioredis.from_url(REDIS_EVENTS_URL)
+            pubsub = redis_client.pubsub()
+            ping_interval = 10
+            ticks_since_ping = 0
+            try:
+                await pubsub.subscribe(EVENTS_CHANNEL)
+                while True:
+                    msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                    if msg is not None and msg.get('type') == 'message':
+                        try:
+                            event = json.loads(msg['data'])
+                            yield f"data: {json.dumps(event, cls=DateTimeEncoder)}\n\n".encode('utf-8')
+                            ticks_since_ping = 0
+                            continue
+                        except (ValueError, TypeError):
+                            pass
+                    ticks_since_ping += 1
+                    if ticks_since_ping >= ping_interval:
+                        yield f"data: {json.dumps({'ping': timezone.now().isoformat()})}\n\n".encode('utf-8')
+                        ticks_since_ping = 0
+            except asyncio.CancelledError:
+                return
+            finally:
+                try:
+                    await pubsub.unsubscribe(EVENTS_CHANNEL)
+                    await pubsub.aclose()
+                    await redis_client.aclose()
+                except Exception:
+                    pass
 
         response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
         response['Cache-Control'] = 'no-cache'

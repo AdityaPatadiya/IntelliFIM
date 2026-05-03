@@ -1,32 +1,3 @@
-# -------------------------------
-# Core Dependencies
-# -------------------------------
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-SQLAlchemy>=2.0.0
-pymysql>=1.1.0
-python-dotenv>=1.0.0
-
-# -------------------------------
-# Authentication & Security
-# -------------------------------
-PyJWT>=2.0.0
-passlib[bcrypt]>=1.7.4
-pydantic[email]>=2.0.0
-
-# -------------------------------
-# Database & ML (FIM + Scanners)
-# -------------------------------
-mysql-connector-python>=9.3.0
-pandas>=2.2.0
-scikit-learn>=1.6.0
-joblib>=1.4.0
-
-# -------------------------------
-# System Utilities
-# -------------------------------
-watchdog>=6.0.0
-requests>=2.0.0
-flask>=3.0.0
-
-sse-starlette>=0.16.0
+# Convenience entry point — install dev deps by default.
+# For prod deploys, install requirements/prod.txt instead.
+-r requirements/dev.txt

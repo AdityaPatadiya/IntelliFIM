@@ -245,13 +245,20 @@ class FIMChangesResponseSerializer(serializers.Serializer):
     """Serializer for FIM changes response"""
 
     class ChangeDetailSerializer(serializers.Serializer):
-        hash = serializers.CharField()
-        previous_hash = serializers.CharField(required=False, allow_null=True)
-        size = serializers.IntegerField()
+        # Nullable on the model (FileMetadata.hash/size/previous_hash all
+        # allow null) so the serializer must too — otherwise a single row
+        # with a null hash crashes the whole /changes/ response.
+        hash = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+        previous_hash = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+        size = serializers.IntegerField(allow_null=True, required=False)
         last_modified = serializers.DateTimeField()
         detected_at = serializers.DateTimeField()
-        type = serializers.CharField(source='item_type')
-        change_id = serializers.UUIDField()
+        # The view at FIMChangesView already passes 'type' (not 'item_type'),
+        # so no source remapping needed.
+        type = serializers.CharField()
+        # The view stringifies change_id with str(uuid), so accept it as char
+        # rather than re-validating as UUID.
+        change_id = serializers.CharField()
 
     added = serializers.DictField(
         child=ChangeDetailSerializer(),

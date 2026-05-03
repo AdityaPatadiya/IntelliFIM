@@ -152,6 +152,9 @@ def log_change(change_type, file_path, username='system', details=None):
     log_message = f"{change_type.upper()}: {file_path}"
 
     if change_type == 'error':
+        err_detail = (details or {}).get('error') if isinstance(details, dict) else None
+        if err_detail:
+            log_message = f"{log_message} -- {err_detail}"
         logger.error(log_message, extra={'details': details})
     else:
         logger.info(log_message, extra={'details': details})
@@ -164,6 +167,18 @@ def log_change(change_type, file_path, username='system', details=None):
         directory=os.path.dirname(file_path) if os.path.exists(file_path) else None,
         details=details
     )
+
+    # Broadcast non-error events to any connected SSE subscribers across
+    # processes. Lazy import keeps a Redis import out of the hot path when
+    # logging happens during early startup before settings are ready.
+    if change_type in ('addition', 'modification', 'deletion', 'renamed'):
+        from .realtime import publish_event
+        publish_event({
+            'type': change_type,
+            'path': file_path,
+            'details': details or {},
+            'timestamp': timezone.now().isoformat(),
+        })
 
 def log_backup(backup_type, directory, username, status, details=None):
     """Log backup operation"""

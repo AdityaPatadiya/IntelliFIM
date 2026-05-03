@@ -18,7 +18,7 @@ from django.core.cache import cache
 from django.db import transaction
 
 from .django_adapters import DjangoDatabaseAdapter
-from fim_utils import FIMMonitor
+from .fim_utils import FIMMonitor
 from .fim_shared import event_queue, get_fim_loop
 from ..utils.backup import Backup
 from ..utils.thread_pool import thread_pool
@@ -196,7 +196,7 @@ class FIMEventHandler(FileSystemEventHandler):
             # Use Django logger instead of direct FIMLog creation
             log_change('addition', _path, self.username, {
                 'hash': current_hash,
-                'type': 'file' if is_file else 'directory',
+                'item_type': 'file' if is_file else 'directory',
                 'directory': dir_path
             })
             
@@ -258,7 +258,9 @@ class FIMEventHandler(FileSystemEventHandler):
                     defaults={'is_active': False}
                 )
             
-            # Update or create file metadata
+            # Update or create file metadata.
+            # `status` must be set after the call — it depends on `created`,
+            # which is what the call returns.
             file_meta, created = FileMetadata.objects.update_or_create(
                 directory=directory,
                 item_path=file_name,
@@ -266,15 +268,17 @@ class FIMEventHandler(FileSystemEventHandler):
                     'item_type': 'file' if is_file else 'directory',
                     'hash': current_hash,
                     'last_modified': timezone.now(),
-                    'status': 'modified' if not created else 'current',
-                    'detected_at': timezone.now()
+                    'detected_at': timezone.now(),
                 }
             )
+            file_meta.status = 'current' if created else 'modified'
+            file_meta.save(update_fields=['status'])
             
             # Use Django logger
             log_change('modification', _path, self.username, {
                 'hash': current_hash,
                 'previous_hash': 'N/A' if created else 'unknown',
+                'item_type': 'file' if is_file else 'directory',
                 'directory': dir_path
             })
             
@@ -340,7 +344,7 @@ class FIMEventHandler(FileSystemEventHandler):
                 # Use Django logger
                 log_change('deletion', _path, self.username, {
                     'directory': dir_path,
-                    'type': 'file' if is_file else 'directory'
+                    'item_type': 'file' if is_file else 'directory'
                 })
             
         except Exception as e:

@@ -215,10 +215,13 @@ DATABASES = {
 DATABASE_ROUTERS = ['IntelliFIM.db_routers.AuthFIMRouter']
 
 # ==================== CACHE CONFIGURATION ====================
+# Uses django-redis (third-party) so CLIENT_CLASS is honored.
+# Dedicated Redis DB index keeps cache separate from Celery broker (/0) and
+# results backend (/1) so a FLUSHDB during debugging can't wipe job state.
 CACHES = {
     'default': {
-        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-        'LOCATION': os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/2'),
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': os.getenv('CACHE_REDIS_URL', 'redis://localhost:6379/2'),
         'OPTIONS': {
             'CLIENT_CLASS': 'django_redis.client.DefaultClient',
         }
@@ -379,15 +382,18 @@ CORS_ALLOW_HEADERS = [
 
 # ==================== FILE SETTINGS ====================
 # Static files (CSS, JavaScript, Images)
-# STATIC_URL = '/static/'
-# STATIC_ROOT = BASE_DIR / 'staticfiles'
-# STATICFILES_DIRS = [BASE_DIR / 'static']
+# Required because django.contrib.staticfiles is in INSTALLED_APPS.
+# The React frontend is served separately by Vite, so we don't ship project-level
+# static assets — STATIC_ROOT is only used by `collectstatic` for admin/DRF assets.
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+# STATICFILES_DIRS = [BASE_DIR / 'static']  # enable only if a project-level static/ dir is added
 
-# Media files
-# MEDIA_URL = '/media/'
-# MEDIA_ROOT = BASE_DIR / 'media'
+# Media files (uploaded content)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
-# Static files serving in production
+# Static files serving in production (whitenoise)
 # STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # File upload settings

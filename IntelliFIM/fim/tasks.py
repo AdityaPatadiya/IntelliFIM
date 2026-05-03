@@ -25,8 +25,16 @@ logger = get_task_logger(__name__)
 
 
 class BaseTaskWithRetry(Task):
-    """Base task with retry and error handling"""
-    autoretry_for = (Exception,)
+    """Base task with retry and error handling.
+
+    Only retry on genuinely transient failures (broker/cache/DB connectivity).
+    Domain errors (ValueError, KeyError, etc.) and programmer errors should fail
+    fast — retrying them just produces N copies of the same failure.
+    """
+    autoretry_for = (
+        ConnectionError,
+        TimeoutError,
+    )
     max_retries = 3
     retry_backoff = True
     retry_backoff_max = 700
@@ -120,10 +128,32 @@ def start_fim_monitoring_task(self, user_id: int, username: str,
         if invalid_dirs:
             raise ValueError(f"Directories do not exist: {invalid_dirs}")
         
+        # Make Start idempotent: skip directories that are already being
+        # monitored instead of raising. The "Start" button being clicked twice
+        # should be a no-op for the duplicates, not a hard error.
         active_dirs = fim_monitor.current_directories if hasattr(fim_monitor, 'current_directories') else []
         overlapping = set(directories) & set(active_dirs)
-        if overlapping:
-            raise ValueError(f"Directories already monitored: {list(overlapping)}")
+        already_monitored = sorted(overlapping)
+        directories = [d for d in directories if d not in overlapping]
+
+        if not directories:
+            cache.set(cache_key, {
+                'status': 'completed',
+                'progress': 100,
+                'message': 'All requested directories are already being monitored',
+                'completed_at': timezone.now().isoformat(),
+                'results': {
+                    'success_dirs': [],
+                    'failed_dirs': [],
+                    'created_dirs': [],
+                    'already_monitored': already_monitored,
+                }
+            }, timeout=7200)
+            return {
+                'status': 'noop',
+                'message': 'All requested directories are already being monitored',
+                'already_monitored': already_monitored,
+            }
         
         cache.set(cache_key, {
             'status': 'processing',
@@ -307,37 +337,39 @@ def stop_fim_monitoring_task(self, username: str,
         
         for directory in directories:
             try:
-                if (hasattr(fim_monitor, "current_directories") and 
-                    directory in fim_monitor.current_directories):
+                # Stop must be idempotent and must work even if the worker
+                # was restarted between Start and Stop (in which case
+                # current_directories is empty but the DB still says is_active=True).
+                # Source of truth is the DB; in-memory state is best-effort.
+                in_memory_active = (
+                    hasattr(fim_monitor, "current_directories")
+                    and directory in fim_monitor.current_directories
+                )
+                if in_memory_active:
                     fim_monitor.current_directories.remove(directory)
-                    
-                    if remove_from_db:
-                        Directory.objects.filter(path=directory).delete()
-                    else:
-                        Directory.objects.filter(path=directory).update(
-                            is_active=False,
-                            last_scan=timezone.now()
-                        )
-                    
-                    stopped_dirs.append(directory)
-                    
-                    fim_logger.log_to_database(
-                        log_type='scan',
-                        level='info',
-                        message=f"Stopped monitoring directory: {directory}",
-                        username=username,
-                        directory=directory
-                    )
+
+                if remove_from_db:
+                    Directory.objects.filter(path=directory).delete()
                 else:
-                    error_dirs.append({'directory': directory, 'error': 'Not actively monitored'})
-                    fim_logger.log_to_database(
-                        log_type='system',
-                        level='warning',
-                        message=f"Directory not actively monitored: {directory}",
-                        username=username,
-                        directory=directory
+                    Directory.objects.filter(path=directory).update(
+                        is_active=False,
+                        last_scan=timezone.now()
                     )
-                    
+
+                stopped_dirs.append(directory)
+
+                fim_logger.log_to_database(
+                    log_type='scan',
+                    level='info' if in_memory_active else 'warning',
+                    message=(
+                        f"Stopped monitoring directory: {directory}"
+                        if in_memory_active
+                        else f"Marked directory inactive (worker had no in-memory state): {directory}"
+                    ),
+                    username=username,
+                    directory=directory
+                )
+
             except Exception as e:
                 error_dirs.append({'directory': directory, 'error': str(e)})
                 fim_logger.log_to_database(
