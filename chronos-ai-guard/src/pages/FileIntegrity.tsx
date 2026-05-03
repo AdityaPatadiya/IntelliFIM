@@ -94,7 +94,7 @@ const FileIntegrity = () => {
   // Fetch status
   const fetchStatus = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/fim/status`, {
+      const response = await fetch(`${API_URL}/api/fim/status/`, {
         headers: getAuthHeaders(),
       });
 
@@ -110,7 +110,7 @@ const FileIntegrity = () => {
   const fetchChanges = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`${API_URL}/api/fim/changes`, {
+      const response = await fetch(`${API_URL}/api/fim/changes/`, {
         headers: getAuthHeaders(),
       });
 
@@ -145,7 +145,7 @@ const FileIntegrity = () => {
   const fetchBaseline = async () => {
     try {
       setLoadingBaseline(true);
-      const response = await fetch(`${API_URL}/api/fim/baseline`, {
+      const response = await fetch(`${API_URL}/api/fim/baseline/`, {
         headers: getAuthHeaders(),
       });
 
@@ -185,7 +185,11 @@ const FileIntegrity = () => {
     }
 
     try {
-      const eventSource = new EventSource(`${API_URL}/api/fim/stream`, {
+      // EventSource can't send Authorization headers, so we pass the JWT
+      // via query param. Backend FIMStreamView accepts ?token=<access>.
+      const token = localStorage.getItem('access_token') || '';
+      const streamUrl = `${API_URL}/api/fim/stream/?token=${encodeURIComponent(token)}`;
+      const eventSource = new EventSource(streamUrl, {
         withCredentials: true,
       });
 
@@ -295,7 +299,7 @@ const FileIntegrity = () => {
     try {
       const directories = startDirectories.split(',').map(d => d.trim()).filter(d => d);
 
-      const response = await fetch(`${API_URL}/api/fim/start`, {
+      const response = await fetch(`${API_URL}/api/fim/start/`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ directories, excluded_files: [] }),
@@ -327,7 +331,7 @@ const FileIntegrity = () => {
   const testSSEConnection = async () => {
     try {
       console.log('Testing SSE connection...');
-      const response = await fetch(`${API_URL}/api/fim/stream`, {
+      const response = await fetch(`${API_URL}/api/fim/stream/`, {
         headers: getAuthHeaders(),
       });
 
@@ -379,7 +383,7 @@ const FileIntegrity = () => {
   // Handle stop monitoring
   const handleStopMonitoring = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/fim/stop`, {
+      const response = await fetch(`${API_URL}/api/fim/stop/`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ directories: fimStatus.watched_directories }),
@@ -410,7 +414,7 @@ const FileIntegrity = () => {
     }
 
     try {
-      const response = await fetch(`${API_URL}/api/fim/add-path`, {
+      const response = await fetch(`${API_URL}/api/fim/add-path/`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ directory: newDirectory }),
@@ -439,7 +443,7 @@ const FileIntegrity = () => {
     }
 
     try {
-      const response = await fetch(`${API_URL}/api/fim/reset-baseline`, {
+      const response = await fetch(`${API_URL}/api/fim/reset-baseline/`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -461,7 +465,7 @@ const FileIntegrity = () => {
   // Handle restore
   const handleRestore = async (path: string) => {
     try {
-      const response = await fetch(`${API_URL}/api/fim/restore`, {
+      const response = await fetch(`${API_URL}/api/fim/restore/`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ path_to_restore: path }),

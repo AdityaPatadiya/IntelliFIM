@@ -49,7 +49,7 @@ const EmployeeManagement = () => {
   const fetchEmployees = async () => {
     try {
       const token = localStorage.getItem('access_token');
-      const response = await fetch(`${API_BASE_URL}/auth/users`, {
+      const response = await fetch(`${API_BASE_URL}/api/auth/users/`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -109,7 +109,7 @@ const EmployeeManagement = () => {
 
       if (editingEmployee) {
         // Update existing employee
-        const response = await fetch(`${API_BASE_URL}/auth/users/${editingEmployee.id}`, {
+        const response = await fetch(`${API_BASE_URL}/api/auth/users/${editingEmployee.id}/`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
@@ -130,7 +130,7 @@ const EmployeeManagement = () => {
         });
       } else {
         // Add new employee
-        const response = await fetch(`${API_BASE_URL}/auth/users`, {
+        const response = await fetch(`${API_BASE_URL}/api/auth/users/create/`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -189,7 +189,7 @@ const EmployeeManagement = () => {
 
     try {
       const token = localStorage.getItem('access_token');
-      const response = await fetch(`${API_BASE_URL}/auth/users/${id}`, {
+      const response = await fetch(`${API_BASE_URL}/api/auth/users/${id}/`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -219,7 +219,7 @@ const EmployeeManagement = () => {
   const handleToggleAdmin = async (id: string, currentStatus: boolean) => {
     try {
       const token = localStorage.getItem('access_token');
-      const response = await fetch(`${API_BASE_URL}/auth/users/${id}/admin`, {
+      const response = await fetch(`${API_BASE_URL}/api/auth/users/${id}/admin/`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,

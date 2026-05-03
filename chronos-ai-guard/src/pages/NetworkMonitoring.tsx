@@ -184,7 +184,7 @@ const NetworkMonitoring = () => {
   // Fetch interfaces
   const fetchInterfaces = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/network/interfaces`, {
+      const response = await fetch(`${API_URL}/api/network/interfaces/`, {
         headers: getAuthHeaders(),
       });
 
@@ -206,7 +206,7 @@ const NetworkMonitoring = () => {
   // Fetch monitor status
   const fetchStatus = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/network/status`, {
+      const response = await fetch(`${API_URL}/api/network/status/`, {
         headers: getAuthHeaders(),
       });
 
@@ -228,7 +228,7 @@ const NetworkMonitoring = () => {
   // Fetch statistics
   const fetchStatistics = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/network/statistics`, {
+      const response = await fetch(`${API_URL}/api/network/statistics/`, {
         headers: getAuthHeaders(),
       });
 
@@ -310,7 +310,7 @@ const NetworkMonitoring = () => {
   // Start monitoring
   const handleStartMonitoring = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/network/start`, {
+      const response = await fetch(`${API_URL}/api/network/start/`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -346,7 +346,7 @@ const NetworkMonitoring = () => {
   // Stop monitoring
   const handleStopMonitoring = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/network/stop`, {
+      const response = await fetch(`${API_URL}/api/network/stop/`, {
         method: 'POST',
         headers: getAuthHeaders(),
       });
@@ -553,7 +553,7 @@ const NetworkMonitoring = () => {
   useEffect(() => {
     const checkPrivileges = async () => {
       try {
-        const response = await fetch(`${API_URL}/api/network/privileges`, {
+        const response = await fetch(`${API_URL}/api/network/privileges/`, {
           headers: getAuthHeaders(),
         });
         const data = await response.json();

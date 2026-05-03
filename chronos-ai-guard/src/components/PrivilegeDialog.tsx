@@ -45,7 +45,7 @@ const PrivilegeDialog: React.FC<PrivilegeDialogProps> = ({
 
   const fetchElevationMethods = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/network/elevation-methods`, {
+      const response = await fetch(`${API_URL}/api/network/elevation-methods/`, {
         headers: getAuthHeaders(),
       });
       const data = await response.json();
@@ -66,7 +66,7 @@ const PrivilegeDialog: React.FC<PrivilegeDialogProps> = ({
     try {
       if (method === 'sudo' && password) {
         // Use password-based elevation
-        const response = await fetch(`${API_URL}/api/network/elevate`, {
+        const response = await fetch(`${API_URL}/api/network/elevate/`, {
           method: 'POST',
           headers: getAuthHeaders(),
           body: JSON.stringify({ password }),
