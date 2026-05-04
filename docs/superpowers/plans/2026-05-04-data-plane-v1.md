@@ -631,10 +631,6 @@ def _ok_transform(raw: dict) -> CanonicalEvent:
     )
 
 
-def _broken_transform(raw: dict) -> CanonicalEvent:
-    raise KeyError("agent")
-
-
 async def test_loop_transforms_and_publishes():
     consumer = FakeConsumer([{"agent": {"id": "agent-001"}, "syscheck": {"path": "/etc/shadow"}}])
     producer = FakeProducer()
@@ -691,6 +687,41 @@ async def test_loop_skips_validation_failure():
     )
     await loop.run()
     assert producer.published == []
+
+
+async def test_loop_continues_after_producer_failure():
+    """A transient producer error must NOT crash the loop.
+
+    Real Kafka clients raise on broker disconnect / request timeout. The loop
+    must log + skip and keep consuming so the partition does not stall.
+    """
+    consumer = FakeConsumer([
+        {"agent": {"id": "agent-001"}},
+        {"agent": {"id": "agent-002"}},
+        {"agent": {"id": "agent-003"}},
+    ])
+
+    class FlakyProducer:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.published: list[tuple[str, bytes]] = []
+
+        async def send_and_wait(self, topic: str, value: bytes, key: bytes | None = None) -> None:
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("simulated kafka outage")
+            self.published.append((topic, value))
+
+    producer = FlakyProducer()
+    loop = NormalizerLoop(
+        consumer=consumer,
+        producer=producer,
+        output_topic="events.normalized",
+        transform=_ok_transform,
+    )
+    await loop.run()
+    assert producer.calls == 3                 # all three attempted
+    assert len(producer.published) == 2        # 1st + 3rd succeeded; 2nd was dropped
 ```
 
 - [ ] **Step 2: Run tests and confirm they fail**
@@ -709,7 +740,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Any, Callable, Protocol
 
 from pydantic import ValidationError
 
@@ -737,6 +768,12 @@ class NormalizerLoop:
     Per-source normalizers wire in a `transform` callable; the loop
     owns all the error handling and Kafka I/O so the source-specific
     code stays small and trivially testable.
+
+    Offset-commit policy: this loop does NOT call `consumer.commit()`. The
+    consumer is expected to be configured with `enable_auto_commit=True`
+    (the aiokafka default). Together with the log-and-skip error policy,
+    this means: a malformed or unpublishable message is skipped and its
+    offset auto-committed; the partition does not stall.
     """
 
     def __init__(
@@ -759,11 +796,17 @@ class NormalizerLoop:
             event = self._safe_transform(payload)
             if event is None:
                 continue
+            await self._safe_publish(event)
+
+    async def _safe_publish(self, event: CanonicalEvent) -> None:
+        try:
             await self._producer.send_and_wait(
                 self._output_topic,
                 value=event.model_dump_json().encode("utf-8"),
                 key=event.host_id.encode("utf-8"),
             )
+        except Exception as exc:  # noqa: BLE001 - any Kafka error must not crash the loop
+            log.warning("publish failed (%s); skipping event %s", exc, event.event_id)
 
     @staticmethod
     def _extract_payload(message: Any) -> dict | None:
@@ -803,7 +846,7 @@ class NormalizerLoop:
 pytest data-plane/normalizers/tests/test_base.py -v
 ```
 
-Expected: 3 passed.
+Expected: 4 passed.
 
 - [ ] **Step 5: Commit**
 
