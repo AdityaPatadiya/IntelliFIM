@@ -35,3 +35,12 @@ def parse_utc(value: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError(f"timestamp missing tz: {value!r}")
     return parsed.astimezone(timezone.utc)
+
+
+def parse_unix_utc(value: float) -> datetime:
+    """Parse a UNIX-style float timestamp (seconds since epoch) into a UTC tz-aware datetime.
+
+    Zeek emits its `ts` field as a float; the canonical schema requires
+    a tz-aware datetime, so we normalise to UTC at the boundary.
+    """
+    return datetime.fromtimestamp(value, tz=timezone.utc)

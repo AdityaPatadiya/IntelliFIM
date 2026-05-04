@@ -1508,12 +1508,75 @@ git commit -m "feat(normalizers): add wazuh-auth normalizer"
 
 ---
 
-### Task 8: `zeek-conn` normalizer
+### Task 8: `zeek-conn` normalizer (extends `_helpers.py`)
+
+Zeek emits timestamps as float UNIX seconds (`ts: 1746374400.123`), which `parse_utc` (string ISO 8601) cannot consume. This task extends `_helpers.py` with `parse_unix_utc(value: float)` so all four Zeek normalizers (Tasks 8-11) share it.
 
 **Files:**
+- Modify: `data-plane/normalizers/src/normalizers/_helpers.py` — add `parse_unix_utc`
+- Modify: `data-plane/normalizers/tests/test_helpers.py` — add 2 tests for `parse_unix_utc`
 - Create: `data-plane/normalizers/tests/fixtures/zeek_conn.json`
 - Create: `data-plane/normalizers/tests/test_zeek_conn.py`
 - Create: `data-plane/normalizers/src/normalizers/zeek_conn.py`
+
+#### Sub-phase A: extend `_helpers.py`
+
+- [ ] **Step A1: Add tests for `parse_unix_utc` to `test_helpers.py`**
+
+Append to the existing test file:
+
+```python
+# --- parse_unix_utc ---
+
+def test_parse_unix_utc_normalises_to_utc():
+    """Zeek emits ts as float seconds since epoch; result is tz-aware UTC."""
+    result = parse_unix_utc(1746374400.0)
+    assert result == datetime(2025, 5, 4, 16, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_unix_utc_preserves_subsecond():
+    result = parse_unix_utc(1746374400.123456)
+    assert result.microsecond == 123456
+    assert result.tzinfo == timezone.utc
+```
+
+Update the import line at the top:
+```python
+from normalizers._helpers import maybe_int, maybe_lower, parse_unix_utc, parse_utc
+```
+
+- [ ] **Step A2: Confirm new tests fail**
+
+```bash
+source .venv/bin/activate
+pytest data-plane/normalizers/tests/test_helpers.py -v
+```
+
+Expected: existing 9 pass, the 2 new ones fail with `ImportError: cannot import name 'parse_unix_utc'`.
+
+- [ ] **Step A3: Add `parse_unix_utc` to `_helpers.py`**
+
+Append after `parse_utc`:
+
+```python
+def parse_unix_utc(value: float) -> datetime:
+    """Parse a UNIX-style float timestamp (seconds since epoch) into a UTC tz-aware datetime.
+
+    Zeek emits its `ts` field as a float; the canonical schema requires
+    a tz-aware datetime, so we normalise to UTC at the boundary.
+    """
+    return datetime.fromtimestamp(value, tz=timezone.utc)
+```
+
+- [ ] **Step A4: Run helper tests, confirm 11 pass**
+
+```bash
+pytest data-plane/normalizers/tests/test_helpers.py -v
+```
+
+Expected: **11 passed**.
+
+#### Sub-phase B: zeek-conn normalizer
 
 - [ ] **Step 1: Add the fixture**
 
@@ -1576,11 +1639,9 @@ from uuid import uuid4
 
 from intellifim_schemas import CanonicalEvent
 
+from normalizers._helpers import parse_unix_utc
+
 ZEEK_HOST_ID = "zeek-sensor"
-
-
-def _ts_to_datetime(ts: float) -> datetime:
-    return datetime.fromtimestamp(ts, tz=timezone.utc)
 
 
 def transform(raw: dict) -> CanonicalEvent:
@@ -1588,7 +1649,7 @@ def transform(raw: dict) -> CanonicalEvent:
         event_id=uuid4(),
         event_type="network.flow",
         source="zeek.conn",
-        timestamp=_ts_to_datetime(raw["ts"]),
+        timestamp=parse_unix_utc(raw["ts"]),
         ingest_timestamp=datetime.now(tz=timezone.utc),
         host_id=ZEEK_HOST_ID,
         src_ip=raw.get("id.orig_h"),

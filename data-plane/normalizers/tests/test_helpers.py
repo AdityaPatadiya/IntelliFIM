@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from normalizers._helpers import maybe_int, maybe_lower, parse_utc
+from normalizers._helpers import maybe_int, maybe_lower, parse_unix_utc, parse_utc
 
 
 # --- maybe_int ---
@@ -50,3 +50,17 @@ def test_parse_utc_rejects_naive_timestamp():
     """A tz-less input would silently use the system local time — refuse it."""
     with pytest.raises(ValueError, match="missing tz"):
         parse_utc("2026-05-04T12:00:00")
+
+
+# --- parse_unix_utc ---
+
+def test_parse_unix_utc_normalises_to_utc():
+    """Zeek emits ts as float seconds since epoch; result is tz-aware UTC."""
+    result = parse_unix_utc(1746374400.0)
+    assert result == datetime(2025, 5, 4, 16, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_unix_utc_preserves_subsecond():
+    result = parse_unix_utc(1746374400.123456)
+    assert result.microsecond == 123456
+    assert result.tzinfo == timezone.utc
