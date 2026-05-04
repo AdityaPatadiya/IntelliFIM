@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.vite/
+.next/
+build/
+**/*.log
+.git/
+.gitignore
+.env
+.env.local
+.env.development
+.env.production
+Dockerfile
+.dockerignore
