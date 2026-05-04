@@ -2541,17 +2541,27 @@ redef Log::default_logdir = "/var/log/zeek";
   zeek-sensor:
     image: zeek/zeek:6.0.4
     container_name: zeek-sensor
-    networks: [bus, victims]
+    # Share victim-server's network namespace so Zeek can passively sniff
+    # all traffic to/from victim-server. Docker's bridge driver does NOT
+    # flood unicast frames between sibling containers — a Zeek container
+    # on its own bridge interface (even with NET_ADMIN/NET_RAW + promiscuous
+    # mode) only sees broadcast/multicast (mDNS, SSDP, ICMPv6 RA), not
+    # the curl/HTTP unicast we want to inspect. Sharing the netns is the
+    # standard fix and downstream consumers (Filebeat, Task 16) read Zeek's
+    # logs via the zeek_logs volume mount, not over the network.
+    network_mode: "service:victim-server"
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    depends_on:
+      - victim-server
     volumes:
       - ./zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro
       - zeek_logs:/var/log/zeek
+    # In victim-server's netns the only NIC is eth0 (its sole network).
     command: >
       sh -c "mkdir -p /var/log/zeek &&
-             zeek -i eth1 -C local 'Site::local_nets += {10.10.0.0/24}' &&
-             tail -F /var/log/zeek/conn.log"
+             zeek -i eth0 -C local 'Site::local_nets += {172.18.0.0/16}'"
 
   victim-server:
     image: nginx:1.27-alpine
