@@ -47,5 +47,44 @@ services:
     ports:
       - "${KAFKA_UI_HOST_PORT:-8080}:8080"
 
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.14.5
+    container_name: wazuh-manager
+    networks: [bus]
+    hostname: wazuh-manager
+    volumes:
+      - ./wazuh/manager/ossec.conf:/wazuh-config-mount/etc/ossec.conf:ro
+      - ./wazuh/manager/local_rules.xml:/wazuh-config-mount/etc/rules/local_rules.xml:ro
+      - wazuh_manager_data:/var/ossec/data
+      - wazuh_manager_logs:/var/ossec/logs
+      - wazuh_manager_queue:/var/ossec/queue
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /var/ossec/logs/alerts/alerts.json"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  wazuh-agent:
+    image: wazuh/wazuh-agent:4.14.5
+    container_name: wazuh-agent
+    networks: [bus, victims]
+    hostname: linux-endpoint-1
+    depends_on:
+      wazuh-manager:
+        condition: service_started
+    environment:
+      WAZUH_MANAGER: "wazuh-manager"
+      WAZUH_AGENT_NAME: "linux-endpoint-1"
+      WAZUH_REGISTRATION_SERVER: "wazuh-manager"
+    volumes:
+      - ./wazuh/agent/ossec.conf:/var/ossec/etc/ossec.conf:ro
+      - ${FIM_MONITORED_HOST_DIR:-./monitored}:/data/monitored
+      - wazuh_agent_state:/var/ossec/queue
+
 volumes:
   kafka_data:
+  wazuh_manager_data:
+  wazuh_manager_logs:
+  wazuh_manager_queue:
+  wazuh_agent_state:

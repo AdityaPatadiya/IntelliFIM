@@ -2365,12 +2365,21 @@ git commit -m "feat(compose): add Kafka (KRaft) + kafka-ui + topic creation scri
 </ossec_config>
 ```
 
-- [ ] **Step 2: Add an empty `local_rules.xml`** (placeholder for any custom rules later)
+- [ ] **Step 2: Add `local_rules.xml`** (placeholder for any custom rules later)
+
+Wazuh 4.14.5's `wazuh-analysisd` refuses to start if a `<group>` block contains zero rules ("Group 'group' without any rule"), so this template ships with a single never-fires rule that keeps the group non-empty. Replace it with real rules as they're added.
 
 ```xml
 <!-- data-plane/wazuh/manager/local_rules.xml -->
 <group name="local,">
-  <!-- Add custom rules here as needed. -->
+  <!-- IntelliFIM placeholder rule: Wazuh 4.14.5 rejects empty groups.
+       Replace with real rules; do NOT delete this block while the group
+       is otherwise empty. -->
+  <rule id="100000" level="0">
+    <decoded_as>json</decoded_as>
+    <field name="__intellifim_placeholder__">^never$</field>
+    <description>IntelliFIM placeholder rule (never fires).</description>
+  </rule>
 </group>
 ```
 
@@ -2420,7 +2429,7 @@ git commit -m "feat(compose): add Kafka (KRaft) + kafka-ui + topic creation scri
 ```yaml
 # Append inside services: in data-plane/docker-compose.yml
   wazuh-manager:
-    image: wazuh/wazuh-manager:4.7.5
+    image: wazuh/wazuh-manager:4.14.5
     container_name: wazuh-manager
     networks: [bus]
     hostname: wazuh-manager
@@ -2438,7 +2447,7 @@ git commit -m "feat(compose): add Kafka (KRaft) + kafka-ui + topic creation scri
       start_period: 60s
 
   wazuh-agent:
-    image: wazuh/wazuh-agent:4.7.5
+    image: wazuh/wazuh-agent:4.14.5
     container_name: wazuh-agent
     networks: [bus, victims]
     hostname: linux-endpoint-1
