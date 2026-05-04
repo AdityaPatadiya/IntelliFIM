@@ -3149,7 +3149,7 @@ cd data-plane
 docker compose --env-file .env.dataplane up -d zeek-sensor victim-server victim-client
 sleep 15
 docker exec zeek-sensor sh -c "apt-get update -qq && apt-get install -y -qq tcpdump >/dev/null"
-docker exec zeek-sensor sh -c "timeout 10 tcpdump -i eth1 -w /tmp/http_get_basic.pcap host victim-server and tcp port 80" || true
+docker exec zeek-sensor sh -c "timeout 10 tcpdump -i eth0 -w /tmp/http_get_basic.pcap host victim-server and tcp port 80" || true
 docker cp zeek-sensor:/tmp/http_get_basic.pcap pcaps/http_get_basic.pcap
 docker compose --env-file .env.dataplane down
 ```
@@ -3171,7 +3171,7 @@ network traffic at the Zeek sensor.
 ## Capturing a new pcap
 
 1. Bring up `zeek-sensor` and the victim containers.
-2. `docker exec zeek-sensor tcpdump -i eth1 -w /tmp/<name>.pcap <bpf-filter>`
+2. `docker exec zeek-sensor tcpdump -i eth0 -w /tmp/<name>.pcap <bpf-filter>`
 3. Generate the traffic in another shell.
 4. `docker cp zeek-sensor:/tmp/<name>.pcap pcaps/<name>.pcap`
 5. Add the file to this table.
@@ -3213,8 +3213,8 @@ docker exec zeek-sensor sh -c "command -v tcpreplay >/dev/null 2>&1 || (apt-get 
 echo "copying ${pcap} → zeek-sensor:/tmp/replay.pcap"
 docker cp "${pcap}" zeek-sensor:/tmp/replay.pcap
 
-echo "replaying onto eth1"
-docker exec zeek-sensor tcpreplay -i eth1 -K /tmp/replay.pcap
+echo "replaying onto eth0"
+docker exec zeek-sensor tcpreplay -i eth0 -K /tmp/replay.pcap
 
 docker exec zeek-sensor rm -f /tmp/replay.pcap
 echo "done. Zeek should produce logs within a second; canonical events follow within ~15s."
