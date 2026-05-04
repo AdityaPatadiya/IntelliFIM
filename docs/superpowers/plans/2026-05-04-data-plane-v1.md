@@ -938,6 +938,9 @@ async def _run() -> None:
     cfg = NormalizerConfig.from_env()
     transform = _load_transform(cfg.source)
 
+    # auto_offset_reset="latest": on a fresh restart, skip the historical
+    # backlog. v1 is a walking skeleton / live demo. Production should
+    # reconsider this — see plan v2.
     consumer = AIOKafkaConsumer(
         cfg.input_topic,
         bootstrap_servers=cfg.bootstrap_servers,
@@ -951,23 +954,31 @@ async def _run() -> None:
     )
 
     log.info("starting normalizer source=%s in=%s out=%s", cfg.source, cfg.input_topic, cfg.output_topic)
+
+    # Nested try/finally so we clean up only what we successfully started.
+    # If producer.start() raises, the outer finally still stops the consumer.
     await consumer.start()
-    await producer.start()
     try:
-        loop = NormalizerLoop(
-            consumer=consumer,
-            producer=producer,
-            output_topic=cfg.output_topic,
-            transform=transform,
-        )
-        await loop.run()
+        await producer.start()
+        try:
+            loop = NormalizerLoop(
+                consumer=consumer,
+                producer=producer,
+                output_topic=cfg.output_topic,
+                transform=transform,
+            )
+            await loop.run()
+        finally:
+            await producer.stop()
     finally:
         await consumer.stop()
-        await producer.stop()
 
 
 def main() -> None:
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        log.info("shutdown requested")
 
 
 if __name__ == "__main__":
