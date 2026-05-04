@@ -1067,13 +1067,13 @@ class CorrelationEngine:
             )
 ```
 
-### Step 4: Run tests, confirm 6 pass
+### Step 4: Run tests, confirm 10 pass
 
 ```bash
 pytest --import-mode=importlib data-plane/correlator/tests/test_engine.py -v
 ```
 
-Expected: **6 passed**.
+Expected: **10 passed**. (6 from the original spec + 4 added during code review: real-`.value`-bytes JSON path, `value=None` skip, invalid-CanonicalEvent-JSON skip, multi-counterpart correlation. The added tests close the only real coverage gap — every production code path in `_extract_event` and the `co_occurring_events` list cardinality > 1 are now exercised.)
 
 ### Step 5: Run full correlator suite
 
@@ -1081,7 +1081,7 @@ Expected: **6 passed**.
 pytest --import-mode=importlib data-plane/correlator/tests -v
 ```
 
-Expected: 5 buffer + 5 config + 6 engine = **16 passed**.
+Expected: 5 buffer + 5 config + 10 engine = **20 passed**.
 
 ### Step 6: Stage
 
@@ -1573,7 +1573,7 @@ pytest --import-mode=importlib \
   data-plane/schemas/tests \
   data-plane/normalizers/tests \
   data-plane/correlator/tests
-# Expected: ~78 passed (20 schemas + 36 normalizers + 16 correlator + extras)
+# Expected: ~82 passed (20 schemas + 36 normalizers + 20 correlator + extras)
 
 # DoD #6: correlations
 cd /home/aditya/Documents/IntelliFIM/data-plane
