@@ -1,3 +1,0 @@
-# Convenience entry point — install dev deps by default.
-# For prod deploys, install requirements/prod.txt instead.
--r requirements/dev.txt
