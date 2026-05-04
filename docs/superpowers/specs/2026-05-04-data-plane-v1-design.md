@@ -38,26 +38,30 @@ The data-plane sub-project is the foundation everything else depends on. v1 prio
 
 ## 3. Architecture
 
-### 3.1 Container Topology (13 services)
+### 3.1 Container Topology (15 services)
 
 | Group | Containers | Image |
 |---|---|---|
-| Source | `wazuh-agent` | `wazuh/wazuh-agent:4.7.x` |
-|  | `wazuh-manager` | `wazuh/wazuh-manager:4.7.x` |
-|  | `zeek-sensor` | `zeek/zeek:6.x` |
-| Shipping | `filebeat-wazuh` | `elastic/filebeat:8.x` |
-|  | `filebeat-zeek` | `elastic/filebeat:8.x` |
-| Bus | `kafka` | `bitnami/kafka:3.7-kraft` |
-| Normalizers (one per source) | `normalizer-wazuh-fim` | custom Python image |
-|  | `normalizer-wazuh-auth` | custom Python image |
-|  | `normalizer-zeek-conn` | custom Python image |
-|  | `normalizer-zeek-dns` | custom Python image |
-|  | `normalizer-zeek-http` | custom Python image |
-|  | `normalizer-zeek-files` | custom Python image |
-| Dev tooling | `kafka-ui` | `provectuslabs/kafka-ui` |
-| Test traffic | 1–2 `victim-*` containers | `curlimages/curl` (or similar) |
+| Source | `wazuh-agent` | `wazuh/wazuh-agent:4.14.5` |
+|  | `wazuh-manager` | `wazuh/wazuh-manager:4.14.5` |
+|  | `zeek-sensor` | `zeek/zeek:6.0.4` (shares `victim-server`'s netns — see §6) |
+| Shipping | `filebeat-wazuh` | `elastic/filebeat:8.13.4` |
+|  | `filebeat-zeek` | `elastic/filebeat:8.13.4` |
+| Bus | `kafka` | `bitnamilegacy/kafka:3.7.0` (KRaft mode, dual listeners 9092/9094) |
+| Normalizers (one per source) | `normalizer-wazuh-fim` | `intellifim-normalizer:dev` (custom) |
+|  | `normalizer-wazuh-auth` | `intellifim-normalizer:dev` (custom) |
+|  | `normalizer-zeek-conn` | `intellifim-normalizer:dev` (custom) |
+|  | `normalizer-zeek-dns` | `intellifim-normalizer:dev` (custom) |
+|  | `normalizer-zeek-http` | `intellifim-normalizer:dev` (custom) |
+|  | `normalizer-zeek-files` | `intellifim-normalizer:dev` (custom) |
+| Dev tooling | `kafka-ui` | `provectuslabs/kafka-ui:v0.7.2` |
+| Test traffic | `victim-server` | `nginx:1.27-alpine` |
+|  | `victim-client` | `curlimages/curl:8.7.1` |
 
-`tcpreplay` is invoked as a one-shot utility from `scripts/replay-pcap.sh`, not a long-running container.
+Notes:
+- All six normalizers share a single image; behaviour is selected at container start by `NORMALIZER_SOURCE`.
+- The `bitnamilegacy/` namespace is used because Bitnami moved `bitnami/kafka` behind a paid Tanzu subscription in mid-2025; the same images are mirrored at `bitnamilegacy/kafka` for compatibility. v2 should pick a long-term home (Apache or Confluent).
+- `tcpreplay` is invoked as a one-shot utility from `scripts/replay-pcap.sh`, not a long-running container.
 
 ### 3.2 Data Flow
 
@@ -196,7 +200,7 @@ class CanonicalEvent(BaseModel):
 | `user_uid` | `syscheck.audit.user.id` | `data.uid` | – | – | – | – |
 | `process_name` | `syscheck.audit.process.name` | `data.process` | – | – | – | – |
 | `process_pid` | `syscheck.audit.process.id` | `data.pid` | – | – | – | – |
-| `file_path` | `syscheck.path` | – | – | – | – | `seen_bytes` source path |
+| `file_path` | `syscheck.path` | – | – | – | – | `filename` |
 | `file_hash_sha256` | `syscheck.sha256_after` | – | – | – | – | `sha256` |
 | `file_size_bytes` | `syscheck.size_after` | – | – | – | – | `seen_bytes` |
 | `src_ip` | – | `data.srcip` | `id.orig_h` | `id.orig_h` | `id.orig_h` | `tx_hosts` |
