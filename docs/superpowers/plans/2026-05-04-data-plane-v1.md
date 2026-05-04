@@ -1676,12 +1676,73 @@ git commit -m "feat(normalizers): add zeek-conn normalizer"
 
 ---
 
-### Task 9: `zeek-dns` normalizer
+### Task 9: `zeek-dns` normalizer (consolidates `ZEEK_HOST_ID`)
+
+Task 8 introduced `ZEEK_HOST_ID = "zeek-sensor"` as a module-level constant in `zeek_conn.py`. Tasks 9-11 all need the same constant. Per the "two-callers rule", this task moves `ZEEK_HOST_ID` into `_helpers.py` so all four Zeek normalizers import it from one place.
 
 **Files:**
+- Modify: `data-plane/normalizers/src/normalizers/_helpers.py` — add `ZEEK_HOST_ID` constant
+- Modify: `data-plane/normalizers/src/normalizers/zeek_conn.py` — import `ZEEK_HOST_ID` instead of defining locally
 - Create: `data-plane/normalizers/tests/fixtures/zeek_dns.json`
 - Create: `data-plane/normalizers/tests/test_zeek_dns.py`
 - Create: `data-plane/normalizers/src/normalizers/zeek_dns.py`
+
+#### Sub-phase A: hoist `ZEEK_HOST_ID`
+
+- [ ] **Step A1: Append `ZEEK_HOST_ID` to `_helpers.py`**
+
+```python
+
+
+# Zeek runs centrally on a SPAN port (no per-host concept). All Zeek normalizers
+# emit canonical events with this constant as the host_id.
+ZEEK_HOST_ID = "zeek-sensor"
+```
+
+- [ ] **Step A2: Update `zeek_conn.py` to import the constant**
+
+Replace the local constant definition with the import. The new file:
+
+```python
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from intellifim_schemas import CanonicalEvent
+
+from normalizers._helpers import ZEEK_HOST_ID, parse_unix_utc
+
+
+def transform(raw: dict) -> CanonicalEvent:
+    # Assumes Zeek's json-streaming-logs policy: fields like id.orig_h arrive
+    # as flat keys with literal dots, not as nested objects.
+    return CanonicalEvent(
+        event_id=uuid4(),
+        event_type="network.flow",
+        source="zeek.conn",
+        timestamp=parse_unix_utc(raw["ts"]),
+        ingest_timestamp=datetime.now(tz=timezone.utc),
+        host_id=ZEEK_HOST_ID,
+        src_ip=raw.get("id.orig_h"),
+        src_port=raw.get("id.orig_p"),
+        dst_ip=raw.get("id.resp_h"),
+        dst_port=raw.get("id.resp_p"),
+        protocol=raw.get("proto"),
+        raw=raw,
+    )
+```
+
+- [ ] **Step A3: Verify zeek-conn tests still pass**
+
+```bash
+source .venv/bin/activate
+pytest data-plane/normalizers/tests/test_zeek_conn.py -v
+```
+
+Expected: 1 passed.
+
+#### Sub-phase B: zeek-dns normalizer
 
 - [ ] **Step 1: Add the fixture**
 
@@ -1744,19 +1805,17 @@ from uuid import uuid4
 
 from intellifim_schemas import CanonicalEvent
 
-ZEEK_HOST_ID = "zeek-sensor"
-
-
-def _ts_to_datetime(ts: float) -> datetime:
-    return datetime.fromtimestamp(ts, tz=timezone.utc)
+from normalizers._helpers import ZEEK_HOST_ID, parse_unix_utc
 
 
 def transform(raw: dict) -> CanonicalEvent:
+    # Assumes Zeek's json-streaming-logs policy: fields like id.orig_h arrive
+    # as flat keys with literal dots, not as nested objects.
     return CanonicalEvent(
         event_id=uuid4(),
         event_type="network.dns_query",
         source="zeek.dns",
-        timestamp=_ts_to_datetime(raw["ts"]),
+        timestamp=parse_unix_utc(raw["ts"]),
         ingest_timestamp=datetime.now(tz=timezone.utc),
         host_id=ZEEK_HOST_ID,
         src_ip=raw.get("id.orig_h"),
@@ -1850,19 +1909,17 @@ from uuid import uuid4
 
 from intellifim_schemas import CanonicalEvent
 
-ZEEK_HOST_ID = "zeek-sensor"
-
-
-def _ts_to_datetime(ts: float) -> datetime:
-    return datetime.fromtimestamp(ts, tz=timezone.utc)
+from normalizers._helpers import ZEEK_HOST_ID, parse_unix_utc
 
 
 def transform(raw: dict) -> CanonicalEvent:
+    # Assumes Zeek's json-streaming-logs policy: fields like id.orig_h arrive
+    # as flat keys with literal dots, not as nested objects.
     return CanonicalEvent(
         event_id=uuid4(),
         event_type="network.http_request",
         source="zeek.http",
-        timestamp=_ts_to_datetime(raw["ts"]),
+        timestamp=parse_unix_utc(raw["ts"]),
         ingest_timestamp=datetime.now(tz=timezone.utc),
         host_id=ZEEK_HOST_ID,
         src_ip=raw.get("id.orig_h"),
@@ -1961,11 +2018,7 @@ from uuid import uuid4
 
 from intellifim_schemas import CanonicalEvent
 
-ZEEK_HOST_ID = "zeek-sensor"
-
-
-def _ts_to_datetime(ts: float) -> datetime:
-    return datetime.fromtimestamp(ts, tz=timezone.utc)
+from normalizers._helpers import ZEEK_HOST_ID, maybe_lower, parse_unix_utc
 
 
 def _first(items: list | None) -> str | None:
@@ -1979,13 +2032,13 @@ def transform(raw: dict) -> CanonicalEvent:
         event_id=uuid4(),
         event_type="network.file_transfer",
         source="zeek.files",
-        timestamp=_ts_to_datetime(raw["ts"]),
+        timestamp=parse_unix_utc(raw["ts"]),
         ingest_timestamp=datetime.now(tz=timezone.utc),
         host_id=ZEEK_HOST_ID,
         src_ip=_first(raw.get("tx_hosts")),
         dst_ip=_first(raw.get("rx_hosts")),
         file_path=raw.get("filename"),
-        file_hash_sha256=raw.get("sha256"),
+        file_hash_sha256=maybe_lower(raw.get("sha256")),
         file_size_bytes=raw.get("seen_bytes"),
         raw=raw,
     )

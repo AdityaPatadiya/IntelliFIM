@@ -44,3 +44,8 @@ def parse_unix_utc(value: float) -> datetime:
     a tz-aware datetime, so we normalise to UTC at the boundary.
     """
     return datetime.fromtimestamp(value, tz=timezone.utc)
+
+
+# Zeek runs centrally on a SPAN port (no per-host concept). All Zeek normalizers
+# emit canonical events with this constant as the host_id.
+ZEEK_HOST_ID = "zeek-sensor"

@@ -13,8 +13,8 @@ def transform(raw: dict) -> CanonicalEvent:
     # as flat keys with literal dots, not as nested objects.
     return CanonicalEvent(
         event_id=uuid4(),
-        event_type="network.flow",
-        source="zeek.conn",
+        event_type="network.dns_query",
+        source="zeek.dns",
         timestamp=parse_unix_utc(raw["ts"]),
         ingest_timestamp=datetime.now(tz=timezone.utc),
         host_id=ZEEK_HOST_ID,
@@ -22,6 +22,8 @@ def transform(raw: dict) -> CanonicalEvent:
         src_port=raw.get("id.orig_p"),
         dst_ip=raw.get("id.resp_h"),
         dst_port=raw.get("id.resp_p"),
-        protocol=raw.get("proto"),
+        # protocol is application-layer, not transport. raw["proto"]="udp" is the
+        # transport for this DNS query — at the canonical boundary we report "dns".
+        protocol="dns",
         raw=raw,
     )
