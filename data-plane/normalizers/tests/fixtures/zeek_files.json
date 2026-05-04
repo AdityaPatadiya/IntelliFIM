@@ -1,0 +1,18 @@
+{
+  "ts": 1746374430.987,
+  "fuid": "FxxxxYY1",
+  "tx_hosts": ["10.10.0.20"],
+  "rx_hosts": ["10.10.0.10"],
+  "conn_uids": ["CHhAvVGS1DHFjwGM12"],
+  "source": "HTTP",
+  "depth": 0,
+  "analyzers": ["SHA256"],
+  "mime_type": "text/html",
+  "filename": "index.html",
+  "duration": 0.12,
+  "seen_bytes": 1500,
+  "total_bytes": 1500,
+  "missing_bytes": 0,
+  "overflow_bytes": 0,
+  "sha256": "ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef5678ab"
+}
