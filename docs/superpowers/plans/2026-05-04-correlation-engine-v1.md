@@ -323,7 +323,7 @@ version = "0.1.0"
 description = "Per-host time-window correlation engine for IntelliFIM"
 requires-python = ">=3.12"
 dependencies = [
-    "intellifim-schemas==0.2.0",
+    "intellifim-schemas>=0.2,<1.0",
     "aiokafka>=0.10,<0.12",
     "pydantic>=2.7,<3",
 ]
