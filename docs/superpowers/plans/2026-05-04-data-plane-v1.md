@@ -199,6 +199,8 @@ def _minimal_event_dict() -> dict:
     }
 
 
+# --- positive cases ---
+
 def test_canonical_event_required_fields_only():
     event = CanonicalEvent.model_validate(_minimal_event_dict())
     assert event.event_type == "file.modified"
@@ -230,6 +232,17 @@ def test_canonical_event_serialization_roundtrip():
     assert rebuilt.src_ip == IPv4Address("10.0.0.1")
 
 
+def test_canonical_event_accepts_zero_file_size_and_root_uid():
+    """Empty files are valid (size=0). Root is valid (uid=0)."""
+    payload = _minimal_event_dict()
+    payload.update({"file_size_bytes": 0, "user_uid": 0})
+    event = CanonicalEvent.model_validate(payload)
+    assert event.file_size_bytes == 0
+    assert event.user_uid == 0
+
+
+# --- negative cases (enum / IP / required field) ---
+
 def test_canonical_event_rejects_unknown_event_type():
     payload = _minimal_event_dict()
     payload["event_type"] = "file.weird"
@@ -256,6 +269,63 @@ def test_canonical_event_missing_required_field():
     del payload["host_id"]
     with pytest.raises(ValidationError):
         CanonicalEvent.model_validate(payload)
+
+
+# --- negative cases (constraint pinning) ---
+
+def test_canonical_event_rejects_unknown_field():
+    """extra='forbid' is the contract — unknown fields must be rejected."""
+    payload = _minimal_event_dict()
+    payload["mystery_field"] = "boom"
+    with pytest.raises(ValidationError):
+        CanonicalEvent.model_validate(payload)
+
+
+def test_canonical_event_rejects_negative_file_size():
+    payload = _minimal_event_dict()
+    payload["file_size_bytes"] = -1
+    with pytest.raises(ValidationError):
+        CanonicalEvent.model_validate(payload)
+
+
+def test_canonical_event_rejects_negative_user_uid():
+    payload = _minimal_event_dict()
+    payload["user_uid"] = -1
+    with pytest.raises(ValidationError):
+        CanonicalEvent.model_validate(payload)
+
+
+def test_canonical_event_rejects_invalid_pid():
+    """PID 0 is the kernel scheduler; real processes start at 1."""
+    payload = _minimal_event_dict()
+    payload["process_pid"] = 0
+    with pytest.raises(ValidationError):
+        CanonicalEvent.model_validate(payload)
+
+
+def test_canonical_event_rejects_port_out_of_range():
+    for bad_port in (0, 65536, -1):
+        payload = _minimal_event_dict()
+        payload["src_port"] = bad_port
+        with pytest.raises(ValidationError):
+            CanonicalEvent.model_validate(payload)
+
+
+def test_canonical_event_rejects_invalid_sha256():
+    """Must be exactly 64 lowercase hex chars."""
+    for bad_hash in ("hello", "a" * 63, "A" * 64, "g" * 64, "a" * 65):
+        payload = _minimal_event_dict()
+        payload["file_hash_sha256"] = bad_hash
+        with pytest.raises(ValidationError):
+            CanonicalEvent.model_validate(payload)
+
+
+def test_canonical_event_rejects_naive_timestamp():
+    """Timestamps must carry tzinfo to be unambiguous across hosts."""
+    payload = _minimal_event_dict()
+    payload["timestamp"] = datetime(2026, 5, 4, 12, 0, 0).isoformat()  # no tzinfo
+    with pytest.raises(ValidationError):
+        CanonicalEvent.model_validate(payload)
 ```
 
 - [ ] **Step 2: Install the package in editable mode**
@@ -278,12 +348,25 @@ Expected: all six tests fail with `ImportError: cannot import name 'CanonicalEve
 
 ```python
 # data-plane/schemas/src/intellifim_schemas/event.py
-from datetime import datetime
+"""Canonical event schema for IntelliFIM.
+
+This is the contract every downstream sub-project (correlation engine, ML
+inference, scoring, dashboard, response orchestrator) imports. Type
+constraints are deliberately strict: invalid values must be rejected at
+the schema boundary rather than propagated downstream.
+"""
 from ipaddress import IPv4Address, IPv6Address
-from typing import Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    PositiveInt,
+)
 
 EventType = Literal[
     "file.modified",
@@ -309,6 +392,9 @@ Source = Literal[
     "zeek.files",
 ]
 
+Port = Annotated[int, Field(ge=1, le=65535)]
+Sha256Hex = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
 
 class CanonicalEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -319,9 +405,9 @@ class CanonicalEvent(BaseModel):
     source: Source
     schema_version: str = "1.0.0"
 
-    # time
-    timestamp: datetime
-    ingest_timestamp: datetime
+    # time (timezone-aware UTC required so cross-host correlation is unambiguous)
+    timestamp: AwareDatetime
+    ingest_timestamp: AwareDatetime
 
     # host
     host_id: str
@@ -329,24 +415,24 @@ class CanonicalEvent(BaseModel):
 
     # actor
     user: str | None = None
-    user_uid: int | None = None
+    user_uid: NonNegativeInt | None = None       # uid 0 = root
     process_name: str | None = None
-    process_pid: int | None = None
+    process_pid: PositiveInt | None = None       # pid 0 is the kernel scheduler
 
     # file subject
     file_path: str | None = None
-    file_hash_sha256: str | None = None
-    file_size_bytes: int | None = None
+    file_hash_sha256: Sha256Hex | None = None
+    file_size_bytes: NonNegativeInt | None = None  # 0 = empty file is valid
 
     # network subject
     src_ip: IPv4Address | IPv6Address | None = None
-    src_port: int | None = None
+    src_port: Port | None = None
     dst_ip: IPv4Address | IPv6Address | None = None
-    dst_port: int | None = None
+    dst_port: Port | None = None
     protocol: str | None = None
 
-    # passthrough
-    raw: dict = Field(default_factory=dict)
+    # passthrough — the unmodified source event, kept for debugging and XAI
+    raw: dict[str, Any] = Field(default_factory=dict)
 ```
 
 - [ ] **Step 5: Run tests and confirm all pass**
@@ -355,7 +441,7 @@ class CanonicalEvent(BaseModel):
 pytest data-plane/schemas/tests -v
 ```
 
-Expected: 6 passed.
+Expected: 13 passed.
 
 - [ ] **Step 6: Commit**
 

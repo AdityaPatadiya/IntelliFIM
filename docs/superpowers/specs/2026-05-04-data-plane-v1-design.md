@@ -120,11 +120,13 @@ The contract every downstream sub-project consumes. Defined in a shared `intelli
 
 ```python
 # intellifim_schemas/event.py
-from datetime import datetime
 from ipaddress import IPv4Address, IPv6Address
-from typing import Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import (
+    AwareDatetime, BaseModel, ConfigDict, Field,
+    NonNegativeInt, PositiveInt,
+)
 
 EventType = Literal[
     "file.modified", "file.created", "file.deleted", "file.read",
@@ -138,16 +140,23 @@ Source = Literal[
     "zeek.conn", "zeek.dns", "zeek.http", "zeek.files",
 ]
 
+Port = Annotated[int, Field(ge=1, le=65535)]
+Sha256Hex = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
 class CanonicalEvent(BaseModel):
+    # extra="forbid": unknown fields are a contract violation, not silently ignored.
+    model_config = ConfigDict(extra="forbid")
+
     # identity
     event_id: UUID
     event_type: EventType
     source: Source
     schema_version: str = "1.0.0"
 
-    # time
-    timestamp: datetime         # event time, UTC
-    ingest_timestamp: datetime  # when normalizer processed it
+    # time — tz-aware UTC required so cross-host correlation is unambiguous
+    timestamp: AwareDatetime
+    ingest_timestamp: AwareDatetime
 
     # host
     host_id: str                # Wazuh agent ID or Zeek sensor ID
@@ -155,24 +164,24 @@ class CanonicalEvent(BaseModel):
 
     # actor
     user: str | None = None
-    user_uid: int | None = None
+    user_uid: NonNegativeInt | None = None       # uid 0 = root
     process_name: str | None = None
-    process_pid: int | None = None
+    process_pid: PositiveInt | None = None       # pid 0 is the kernel scheduler
 
     # file subject
     file_path: str | None = None
-    file_hash_sha256: str | None = None
-    file_size_bytes: int | None = None
+    file_hash_sha256: Sha256Hex | None = None
+    file_size_bytes: NonNegativeInt | None = None  # 0 = empty file is valid
 
     # network subject
     src_ip: IPv4Address | IPv6Address | None = None
-    src_port: int | None = None
+    src_port: Port | None = None
     dst_ip: IPv4Address | IPv6Address | None = None
-    dst_port: int | None = None
+    dst_port: Port | None = None
     protocol: str | None = None
 
     # passthrough — original event for debugging / future XAI
-    raw: dict = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
 ```
 
 ### Per-source field mapping (v1)
