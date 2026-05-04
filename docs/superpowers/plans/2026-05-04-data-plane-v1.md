@@ -2644,15 +2644,18 @@ filebeat.inputs:
           add_error_key: true
 
 processors:
+  # Keep agent.id and agent.name so partition.hash below can use agent.id.
+  # Filebeat runs processors before output, so dropping agent.id here would
+  # break partitioning and Filebeat would silently fall back to round-robin.
   - drop_fields:
-      fields: ["host", "agent.ephemeral_id", "agent.id", "agent.name", "agent.type", "agent.version", "ecs", "input", "log", "@version"]
+      fields: ["host", "agent.ephemeral_id", "agent.type", "agent.version", "ecs", "input", "log", "@version"]
       ignore_missing: true
 
 output.kafka:
   hosts: ["kafka:9092"]
   topics:
-    # Route by rule.groups membership: anything with "syscheck" → wazuh.fim,
-    # anything in the auth groups → wazuh.auth.
+    # Route by rule.groups membership: anything with "syscheck" -> wazuh.fim,
+    # anything in the auth groups -> wazuh.auth.
     - topic: "wazuh.fim"
       when:
         contains:

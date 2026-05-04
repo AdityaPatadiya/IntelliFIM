@@ -126,6 +126,36 @@ services:
                sleep 5;
              done"
 
+  filebeat-wazuh:
+    image: elastic/filebeat:8.13.4
+    container_name: filebeat-wazuh
+    user: root
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      wazuh-manager:
+        condition: service_healthy
+    volumes:
+      - ./filebeat/filebeat-wazuh.yml:/usr/share/filebeat/filebeat.yml:ro
+      - wazuh_manager_logs:/var/ossec/logs:ro
+    command: ["filebeat", "-e", "--strict.perms=false"]
+
+  filebeat-zeek:
+    image: elastic/filebeat:8.13.4
+    container_name: filebeat-zeek
+    user: root
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      zeek-sensor:
+        condition: service_started
+    volumes:
+      - ./filebeat/filebeat-zeek.yml:/usr/share/filebeat/filebeat.yml:ro
+      - zeek_logs:/var/log/zeek:ro
+    command: ["filebeat", "-e", "--strict.perms=false"]
+
 volumes:
   kafka_data:
   wazuh_manager_data:
