@@ -16,3 +16,15 @@ def test_conn_maps_to_network_flow(load_fixture):
     assert event.dst_port == 80
     assert event.protocol == "tcp"
     assert event.raw == raw
+
+
+def test_conn_with_zero_ports_yields_none(load_fixture):
+    """Zeek records ICMP/connectionless flows with port 0; canonical schema
+    requires port >= 1, so the transform must coalesce 0 to None."""
+    raw = load_fixture("zeek_conn.json")
+    raw["id.orig_p"] = 0
+    raw["id.resp_p"] = 0
+    raw["proto"] = "icmp"
+    event = transform(raw)
+    assert event.src_port is None
+    assert event.dst_port is None

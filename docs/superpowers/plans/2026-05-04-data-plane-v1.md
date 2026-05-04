@@ -1645,6 +1645,8 @@ ZEEK_HOST_ID = "zeek-sensor"
 
 
 def transform(raw: dict) -> CanonicalEvent:
+    # Assumes Zeek's json-streaming-logs policy: fields like id.orig_h arrive
+    # as flat keys with literal dots, not as nested objects.
     return CanonicalEvent(
         event_id=uuid4(),
         event_type="network.flow",
@@ -1653,9 +1655,12 @@ def transform(raw: dict) -> CanonicalEvent:
         ingest_timestamp=datetime.now(tz=timezone.utc),
         host_id=ZEEK_HOST_ID,
         src_ip=raw.get("id.orig_h"),
-        src_port=raw.get("id.orig_p"),
+        # `or None`: Zeek records ICMP/ICMPv6/connectionless flows with port 0,
+        # which violates the canonical schema's Port constraint (ge=1). ICMP
+        # has no port — representing as None is honest.
+        src_port=raw.get("id.orig_p") or None,
         dst_ip=raw.get("id.resp_h"),
-        dst_port=raw.get("id.resp_p"),
+        dst_port=raw.get("id.resp_p") or None,
         protocol=raw.get("proto"),
         raw=raw,
     )

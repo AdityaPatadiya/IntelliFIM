@@ -19,9 +19,11 @@ def transform(raw: dict) -> CanonicalEvent:
         ingest_timestamp=datetime.now(tz=timezone.utc),
         host_id=ZEEK_HOST_ID,
         src_ip=raw.get("id.orig_h"),
-        src_port=raw.get("id.orig_p"),
+        # `or None`: defensive — Zeek normally always sets ports for DNS,
+        # but coalescing 0 to None matches the zeek.conn convention.
+        src_port=raw.get("id.orig_p") or None,
         dst_ip=raw.get("id.resp_h"),
-        dst_port=raw.get("id.resp_p"),
+        dst_port=raw.get("id.resp_p") or None,
         # protocol is application-layer, not transport. raw["proto"]="udp" is the
         # transport for this DNS query — at the canonical boundary we report "dns".
         protocol="dns",

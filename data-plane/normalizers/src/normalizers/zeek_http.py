@@ -19,9 +19,11 @@ def transform(raw: dict) -> CanonicalEvent:
         ingest_timestamp=datetime.now(tz=timezone.utc),
         host_id=ZEEK_HOST_ID,
         src_ip=raw.get("id.orig_h"),
-        src_port=raw.get("id.orig_p"),
+        # `or None`: defensive — Zeek normally always sets ports for HTTP,
+        # but coalescing 0 to None matches the zeek.conn convention.
+        src_port=raw.get("id.orig_p") or None,
         dst_ip=raw.get("id.resp_h"),
-        dst_port=raw.get("id.resp_p"),
+        dst_port=raw.get("id.resp_p") or None,
         # protocol is application-layer. raw fields like "method" / "host" / "uri"
         # are HTTP-specific; "http" is the canonical application name we report.
         protocol="http",

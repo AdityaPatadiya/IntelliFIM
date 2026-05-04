@@ -156,6 +156,72 @@ services:
       - zeek_logs:/var/log/zeek:ro
     command: ["filebeat", "-e", "--strict.perms=false"]
 
+  normalizer-wazuh-fim:
+    image: intellifim-normalizer:dev
+    container_name: normalizer-wazuh-fim
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      NORMALIZER_SOURCE: "wazuh.fim"
+      KAFKA_BOOTSTRAP: "kafka:9092"
+
+  normalizer-wazuh-auth:
+    image: intellifim-normalizer:dev
+    container_name: normalizer-wazuh-auth
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      NORMALIZER_SOURCE: "wazuh.auth"
+      KAFKA_BOOTSTRAP: "kafka:9092"
+
+  normalizer-zeek-conn:
+    image: intellifim-normalizer:dev
+    container_name: normalizer-zeek-conn
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      NORMALIZER_SOURCE: "zeek.conn"
+      KAFKA_BOOTSTRAP: "kafka:9092"
+
+  normalizer-zeek-dns:
+    image: intellifim-normalizer:dev
+    container_name: normalizer-zeek-dns
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      NORMALIZER_SOURCE: "zeek.dns"
+      KAFKA_BOOTSTRAP: "kafka:9092"
+
+  normalizer-zeek-http:
+    image: intellifim-normalizer:dev
+    container_name: normalizer-zeek-http
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      NORMALIZER_SOURCE: "zeek.http"
+      KAFKA_BOOTSTRAP: "kafka:9092"
+
+  normalizer-zeek-files:
+    image: intellifim-normalizer:dev
+    container_name: normalizer-zeek-files
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      NORMALIZER_SOURCE: "zeek.files"
+      KAFKA_BOOTSTRAP: "kafka:9092"
+
 volumes:
   kafka_data:
   wazuh_manager_data:
