@@ -2176,7 +2176,10 @@ networks:
 
 services:
   kafka:
-    image: bitnami/kafka:3.7.0
+    # bitnami/kafka moved to a paid Tanzu subscription in mid-2025; the
+    # same images are mirrored at bitnamilegacy/kafka. v2 should pick a
+    # long-term home (Apache or Confluent).
+    image: bitnamilegacy/kafka:3.7.0
     container_name: kafka
     networks: [bus]
     environment:
