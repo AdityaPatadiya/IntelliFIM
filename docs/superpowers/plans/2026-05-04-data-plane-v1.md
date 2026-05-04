@@ -1013,14 +1013,140 @@ Each task in this phase follows the same shape:
 
 Field mappings come from §4 of the spec doc.
 
-### Task 6: `wazuh-fim` normalizer
+### Task 6: `wazuh-fim` normalizer (with shared helpers)
+
+This task introduces the first per-source normalizer. It also extracts a small shared `_helpers.py` module so that Tasks 7-11 don't duplicate timestamp parsing / int conversion / hash lowercasing.
 
 **Files:**
+- Create: `data-plane/normalizers/src/normalizers/_helpers.py` ← shared helpers
+- Create: `data-plane/normalizers/tests/test_helpers.py` ← helper tests
 - Create: `data-plane/normalizers/tests/fixtures/wazuh_fim_modify.json`
 - Create: `data-plane/normalizers/tests/fixtures/wazuh_fim_create.json`
 - Create: `data-plane/normalizers/tests/fixtures/wazuh_fim_delete.json`
 - Create: `data-plane/normalizers/tests/test_wazuh_fim.py`
 - Create: `data-plane/normalizers/src/normalizers/wazuh_fim.py`
+
+#### Sub-phase A: shared helpers
+
+- [ ] **Step A1: Write failing tests for `_helpers.py`**
+
+```python
+# data-plane/normalizers/tests/test_helpers.py
+from datetime import datetime, timezone
+
+import pytest
+
+from normalizers._helpers import maybe_int, maybe_lower, parse_utc
+
+
+# --- maybe_int ---
+
+def test_maybe_int_passes_none_through():
+    assert maybe_int(None) is None
+
+
+def test_maybe_int_treats_empty_string_as_none():
+    assert maybe_int("") is None
+
+
+def test_maybe_int_converts_numeric_string():
+    assert maybe_int("42") == 42
+
+
+def test_maybe_int_passes_int_through():
+    assert maybe_int(42) == 42
+
+
+# --- maybe_lower ---
+
+def test_maybe_lower_passes_none_through():
+    assert maybe_lower(None) is None
+
+
+def test_maybe_lower_lowercases_string():
+    assert maybe_lower("ABC123") == "abc123"
+
+
+# --- parse_utc ---
+
+def test_parse_utc_normalises_utc_timestamp():
+    result = parse_utc("2026-05-04T12:00:00.000+0000")
+    assert result == datetime(2026, 5, 4, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_utc_converts_non_utc_offset_to_utc():
+    """Tz-aware non-UTC input is converted to UTC, not preserved."""
+    result = parse_utc("2026-05-04T17:30:00+05:30")
+    assert result == datetime(2026, 5, 4, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_utc_rejects_naive_timestamp():
+    """A tz-less input would silently use the system local time — refuse it."""
+    with pytest.raises(ValueError, match="missing tz"):
+        parse_utc("2026-05-04T12:00:00")
+```
+
+- [ ] **Step A2: Confirm tests fail**
+
+```bash
+source .venv/bin/activate
+pytest data-plane/normalizers/tests/test_helpers.py -v
+```
+
+Expected: ImportError on `normalizers._helpers`.
+
+- [ ] **Step A3: Implement `_helpers.py`**
+
+```python
+# data-plane/normalizers/src/normalizers/_helpers.py
+"""Per-source normalizer helpers.
+
+These three functions are shared by every per-source normalizer module.
+Centralising them here ensures a single source of truth for the project
+conventions: SHA-256 hashes are lowercase hex, timestamps are UTC
+tz-aware, missing-or-empty integer fields collapse to None.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+
+def maybe_int(value: str | int | None) -> int | None:
+    """Convert string-or-int to int; treat None and "" as missing."""
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def maybe_lower(value: str | None) -> str | None:
+    """Lowercase the string, pass None through unchanged."""
+    if value is None:
+        return None
+    return value.lower()
+
+
+def parse_utc(value: str) -> datetime:
+    """Parse an ISO 8601 timestamp string into a UTC tz-aware datetime.
+
+    Refuses tz-less input — `astimezone()` on a naive datetime would
+    silently apply the system local time of the normalizer container,
+    which would corrupt cross-host correlation downstream.
+    """
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        raise ValueError(f"timestamp missing tz: {value!r}")
+    return parsed.astimezone(timezone.utc)
+```
+
+- [ ] **Step A4: Run tests, confirm 9 pass**
+
+```bash
+pytest data-plane/normalizers/tests/test_helpers.py -v
+```
+
+Expected: 9 passed.
+
+#### Sub-phase B: wazuh-fim normalizer
 
 - [ ] **Step 1: Add the fixtures**
 
@@ -1080,6 +1206,8 @@ Field mappings come from §4 of the spec doc.
 
 ```python
 # data-plane/normalizers/tests/test_wazuh_fim.py
+from datetime import timezone
+
 from intellifim_schemas import CanonicalEvent
 
 from normalizers.wazuh_fim import transform
@@ -1116,6 +1244,22 @@ def test_delete_event_maps_to_file_deleted(load_fixture):
     assert event.event_type == "file.deleted"
     assert event.file_size_bytes is None
     assert event.file_hash_sha256 is None
+
+
+def test_timestamp_is_normalized_to_utc(load_fixture):
+    """Convention: every canonical event carries a UTC tz-aware timestamp."""
+    raw = load_fixture("wazuh_fim_modify.json")
+    event = transform(raw)
+    assert event.timestamp.tzinfo == timezone.utc
+    assert event.timestamp.isoformat() == "2026-05-04T12:00:00+00:00"
+
+
+def test_sha256_hash_is_lowercased(load_fixture):
+    """Convention: SHA-256 hashes are lowercase hex (Sha256Hex schema constraint)."""
+    raw = load_fixture("wazuh_fim_modify.json")
+    raw["syscheck"]["sha256_after"] = "AB12CD34EF56AB12CD34EF56AB12CD34EF56AB12CD34EF56AB12CD34EF561234"
+    event = transform(raw)
+    assert event.file_hash_sha256 == "ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef561234"
 ```
 
 - [ ] **Step 3: Confirm tests fail**
@@ -1137,17 +1281,13 @@ from uuid import uuid4
 
 from intellifim_schemas import CanonicalEvent
 
+from normalizers._helpers import maybe_int, maybe_lower, parse_utc
+
 _EVENT_TYPE_MAP = {
     "added": "file.created",
     "modified": "file.modified",
     "deleted": "file.deleted",
 }
-
-
-def _maybe_int(value: str | int | None) -> int | None:
-    if value is None or value == "":
-        return None
-    return int(value)
 
 
 def transform(raw: dict) -> CanonicalEvent:
@@ -1161,17 +1301,17 @@ def transform(raw: dict) -> CanonicalEvent:
         event_id=uuid4(),
         event_type=_EVENT_TYPE_MAP[syscheck["event"]],
         source="wazuh.fim",
-        timestamp=datetime.fromisoformat(raw["timestamp"].replace("+0000", "+00:00")),
+        timestamp=parse_utc(raw["timestamp"]),
         ingest_timestamp=datetime.now(tz=timezone.utc),
         host_id=agent["id"],
         host_name=agent.get("name"),
         user=user.get("name"),
-        user_uid=_maybe_int(user.get("id")),
+        user_uid=maybe_int(user.get("id")),
         process_name=process.get("name"),
-        process_pid=_maybe_int(process.get("id")),
+        process_pid=maybe_int(process.get("id")),
         file_path=syscheck.get("path"),
-        file_hash_sha256=syscheck.get("sha256_after"),
-        file_size_bytes=_maybe_int(syscheck.get("size_after")),
+        file_hash_sha256=maybe_lower(syscheck.get("sha256_after")),
+        file_size_bytes=maybe_int(syscheck.get("size_after")),
         raw=raw,
     )
 ```
@@ -1182,7 +1322,7 @@ def transform(raw: dict) -> CanonicalEvent:
 pytest data-plane/normalizers/tests/test_wazuh_fim.py -v
 ```
 
-Expected: 3 passed.
+Expected: 5 passed.
 
 - [ ] **Step 6: Commit**
 

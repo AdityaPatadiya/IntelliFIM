@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-05-04T12:00:01.000+0000",
+  "agent": {"id": "001", "name": "linux-endpoint-1"},
+  "syscheck": {
+    "path": "/tmp/new-file.txt",
+    "event": "added",
+    "size_after": "12",
+    "sha256_after": "0000000000000000000000000000000000000000000000000000000000000000",
+    "audit": {
+      "user": {"name": "alice", "id": "1001"},
+      "process": {"name": "touch", "id": "4243"}
+    }
+  }
+}
