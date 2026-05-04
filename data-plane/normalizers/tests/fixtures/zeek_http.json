@@ -1,0 +1,13 @@
+{
+  "ts": 1746374420.789,
+  "uid": "CHhAvVGS1DHFjwGM11",
+  "id.orig_h": "10.10.0.10",
+  "id.orig_p": 49160,
+  "id.resp_h": "10.10.0.20",
+  "id.resp_p": 80,
+  "method": "GET",
+  "host": "example.com",
+  "uri": "/index.html",
+  "user_agent": "curl/8.7.1",
+  "status_code": 200
+}
