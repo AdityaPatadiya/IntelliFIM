@@ -224,6 +224,18 @@ services:
       NORMALIZER_SOURCE: "zeek.files"
       KAFKA_BOOTSTRAP: "kafka:9092"
 
+  correlation-engine:
+    image: intellifim-correlator:dev
+    container_name: correlation-engine
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: "kafka:9092"
+      CORRELATION_WINDOW_SECONDS: "60"
+      CONSUMER_GROUP: "correlation-engine"
+
 volumes:
   kafka_data:
   wazuh_manager_data:
