@@ -441,7 +441,7 @@ class CanonicalEvent(BaseModel):
 pytest data-plane/schemas/tests -v
 ```
 
-Expected: 13 passed.
+Expected: 14 passed.
 
 - [ ] **Step 6: Commit**
 
