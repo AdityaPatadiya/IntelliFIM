@@ -58,6 +58,7 @@ data-plane/
 - Create: `data-plane/schemas/tests/test_correlation.py`
 - Modify: `data-plane/schemas/src/intellifim_schemas/__init__.py` (re-export new types)
 - Modify: `data-plane/schemas/pyproject.toml` (bump `version = "0.1.0"` → `"0.2.0"`)
+- Modify: `data-plane/normalizers/pyproject.toml` (relax `intellifim-schemas==0.1.0` → `>=0.2,<1.0` so the normalizer Dockerfile installs against the bumped schemas package without a resolver conflict)
 
 ### Step 1: Write the failing tests
 
@@ -291,7 +292,8 @@ Expected: all original 14 tests + 6 new tests = **20 passed**.
 git add data-plane/schemas/src/intellifim_schemas/correlation.py \
         data-plane/schemas/src/intellifim_schemas/__init__.py \
         data-plane/schemas/tests/test_correlation.py \
-        data-plane/schemas/pyproject.toml
+        data-plane/schemas/pyproject.toml \
+        data-plane/normalizers/pyproject.toml
 ```
 
 > Suggested commit: `feat(schemas): add CorrelatedEvent and bump intellifim-schemas to 0.2.0`
