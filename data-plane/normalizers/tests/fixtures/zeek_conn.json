@@ -1,0 +1,14 @@
+{
+  "ts": 1746374400.123,
+  "uid": "CHhAvVGS1DHFjwGM9",
+  "id.orig_h": "10.10.0.10",
+  "id.orig_p": 49152,
+  "id.resp_h": "10.10.0.20",
+  "id.resp_p": 80,
+  "proto": "tcp",
+  "service": "http",
+  "duration": 0.5,
+  "orig_bytes": 200,
+  "resp_bytes": 1500,
+  "conn_state": "SF"
+}

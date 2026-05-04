@@ -1,0 +1,37 @@
+filebeat.inputs:
+  - type: filestream
+    id: zeek-conn
+    paths: ["/var/log/zeek/conn.log"]
+    parsers: [{ ndjson: { target: "", add_error_key: true } }]
+    fields: { _topic: "zeek.conn" }
+    fields_under_root: true
+  - type: filestream
+    id: zeek-dns
+    paths: ["/var/log/zeek/dns.log"]
+    parsers: [{ ndjson: { target: "", add_error_key: true } }]
+    fields: { _topic: "zeek.dns" }
+    fields_under_root: true
+  - type: filestream
+    id: zeek-http
+    paths: ["/var/log/zeek/http.log"]
+    parsers: [{ ndjson: { target: "", add_error_key: true } }]
+    fields: { _topic: "zeek.http" }
+    fields_under_root: true
+  - type: filestream
+    id: zeek-files
+    paths: ["/var/log/zeek/files.log"]
+    parsers: [{ ndjson: { target: "", add_error_key: true } }]
+    fields: { _topic: "zeek.files" }
+    fields_under_root: true
+
+processors:
+  - drop_fields:
+      fields: ["host", "agent", "ecs", "input", "log", "@version", "@timestamp"]
+      ignore_missing: true
+
+output.kafka:
+  hosts: ["kafka:9092"]
+  topic: "%{[_topic]}"
+  required_acks: 1
+  codec.json:
+    pretty: false

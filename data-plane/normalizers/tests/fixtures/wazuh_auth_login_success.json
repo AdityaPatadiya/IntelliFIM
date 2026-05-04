@@ -1,0 +1,10 @@
+{
+  "timestamp": "2026-05-04T12:01:00.000+0000",
+  "agent": {"id": "001", "name": "linux-endpoint-1"},
+  "rule": {"id": "5501", "description": "PAM: Login session opened.", "groups": ["pam", "syslog", "authentication_success"]},
+  "data": {
+    "dstuser": "alice",
+    "uid": "1001",
+    "srcip": "10.0.0.42"
+  }
+}

@@ -1,0 +1,14 @@
+<!-- data-plane/wazuh/manager/local_rules.xml -->
+<group name="local,">
+  <!--
+    Placeholder rule so wazuh-analysisd does not reject this group as
+    empty. Wazuh requires at least one <rule> per <group>; using an
+    impossible match keeps the group valid without firing alerts.
+    Add real custom rules below as needed.
+  -->
+  <rule id="100000" level="0">
+    <decoded_as>json</decoded_as>
+    <field name="__intellifim_placeholder__">^never$</field>
+    <description>IntelliFIM placeholder rule (never fires).</description>
+  </rule>
+</group>

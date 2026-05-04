@@ -1,0 +1,233 @@
+name: intellifim-dataplane
+
+networks:
+  bus:
+    driver: bridge
+  victims:
+    driver: bridge
+
+services:
+  kafka:
+    # bitnami/kafka moved to a paid Tanzu subscription in mid-2025; the
+    # same images are mirrored at bitnamilegacy/kafka. v2 should pick a
+    # long-term home (Apache or Confluent).
+    image: bitnamilegacy/kafka:3.7.0
+    container_name: kafka
+    networks: [bus]
+    environment:
+      # KRaft mode — no Zookeeper.
+      KAFKA_CFG_NODE_ID: "1"
+      KAFKA_CFG_PROCESS_ROLES: "controller,broker"
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094"
+      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094"
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "false"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:9092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "9094:9094"
+    volumes:
+      - kafka_data:/bitnami/kafka
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: kafka-ui
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: "intellifim-dataplane"
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "kafka:9092"
+    ports:
+      - "${KAFKA_UI_HOST_PORT:-8080}:8080"
+
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.14.5
+    container_name: wazuh-manager
+    networks: [bus]
+    hostname: wazuh-manager
+    volumes:
+      - ./wazuh/manager/ossec.conf:/wazuh-config-mount/etc/ossec.conf:ro
+      - ./wazuh/manager/local_rules.xml:/wazuh-config-mount/etc/rules/local_rules.xml:ro
+      - wazuh_manager_data:/var/ossec/data
+      - wazuh_manager_logs:/var/ossec/logs
+      - wazuh_manager_queue:/var/ossec/queue
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /var/ossec/logs/alerts/alerts.json"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  wazuh-agent:
+    image: wazuh/wazuh-agent:4.14.5
+    container_name: wazuh-agent
+    networks: [bus, victims]
+    hostname: linux-endpoint-1
+    depends_on:
+      wazuh-manager:
+        condition: service_started
+    environment:
+      WAZUH_MANAGER: "wazuh-manager"
+      WAZUH_AGENT_NAME: "linux-endpoint-1"
+      WAZUH_REGISTRATION_SERVER: "wazuh-manager"
+    volumes:
+      - ./wazuh/agent/ossec.conf:/var/ossec/etc/ossec.conf:ro
+      - ${FIM_MONITORED_HOST_DIR:-./monitored}:/data/monitored
+      - wazuh_agent_state:/var/ossec/queue
+
+  zeek-sensor:
+    image: zeek/zeek:6.0.4
+    container_name: zeek-sensor
+    # Share victim-server's network namespace so Zeek can passively sniff
+    # all traffic to/from victim-server. Docker's bridge driver does NOT
+    # flood unicast frames between sibling containers — a Zeek container
+    # on its own bridge interface (even with NET_ADMIN/NET_RAW + promiscuous
+    # mode) only sees broadcast/multicast (mDNS, SSDP, ICMPv6 RA), not
+    # the curl/HTTP unicast we want to inspect. Sharing the netns is the
+    # standard fix and downstream consumers (Filebeat) read Zeek's logs
+    # via the zeek_logs volume mount, not over the network.
+    network_mode: "service:victim-server"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    depends_on:
+      - victim-server
+    volumes:
+      - ./zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro
+      - zeek_logs:/var/log/zeek
+    # In victim-server's netns the only NIC is eth0 (its sole network).
+    command: >
+      sh -c "mkdir -p /var/log/zeek &&
+             zeek -i eth0 -C local 'Site::local_nets += {172.18.0.0/16}'"
+
+  victim-server:
+    image: nginx:1.27-alpine
+    container_name: victim-server
+    networks: [victims]
+    hostname: victim-server
+
+  victim-client:
+    image: curlimages/curl:8.7.1
+    container_name: victim-client
+    networks: [victims]
+    depends_on:
+      - victim-server
+    entrypoint: >
+      sh -c "while true; do
+               curl -s http://victim-server/ -o /dev/null;
+               curl -s http://victim-server/index.html -o /dev/null;
+               sleep 5;
+             done"
+
+  filebeat-wazuh:
+    image: elastic/filebeat:8.13.4
+    container_name: filebeat-wazuh
+    user: root
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      wazuh-manager:
+        condition: service_healthy
+    volumes:
+      - ./filebeat/filebeat-wazuh.yml:/usr/share/filebeat/filebeat.yml:ro
+      - wazuh_manager_logs:/var/ossec/logs:ro
+    command: ["filebeat", "-e", "--strict.perms=false"]
+
+  filebeat-zeek:
+    image: elastic/filebeat:8.13.4
+    container_name: filebeat-zeek
+    user: root
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      zeek-sensor:
+        condition: service_started
+    volumes:
+      - ./filebeat/filebeat-zeek.yml:/usr/share/filebeat/filebeat.yml:ro
+      - zeek_logs:/var/log/zeek:ro
+    command: ["filebeat", "-e", "--strict.perms=false"]
+
+  normalizer-wazuh-fim:
+    image: intellifim-normalizer:dev
+    container_name: normalizer-wazuh-fim
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      NORMALIZER_SOURCE: "wazuh.fim"
+      KAFKA_BOOTSTRAP: "kafka:9092"
+
+  normalizer-wazuh-auth:
+    image: intellifim-normalizer:dev
+    container_name: normalizer-wazuh-auth
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      NORMALIZER_SOURCE: "wazuh.auth"
+      KAFKA_BOOTSTRAP: "kafka:9092"
+
+  normalizer-zeek-conn:
+    image: intellifim-normalizer:dev
+    container_name: normalizer-zeek-conn
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      NORMALIZER_SOURCE: "zeek.conn"
+      KAFKA_BOOTSTRAP: "kafka:9092"
+
+  normalizer-zeek-dns:
+    image: intellifim-normalizer:dev
+    container_name: normalizer-zeek-dns
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      NORMALIZER_SOURCE: "zeek.dns"
+      KAFKA_BOOTSTRAP: "kafka:9092"
+
+  normalizer-zeek-http:
+    image: intellifim-normalizer:dev
+    container_name: normalizer-zeek-http
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      NORMALIZER_SOURCE: "zeek.http"
+      KAFKA_BOOTSTRAP: "kafka:9092"
+
+  normalizer-zeek-files:
+    image: intellifim-normalizer:dev
+    container_name: normalizer-zeek-files
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      NORMALIZER_SOURCE: "zeek.files"
+      KAFKA_BOOTSTRAP: "kafka:9092"
+
+volumes:
+  kafka_data:
+  wazuh_manager_data:
+  wazuh_manager_logs:
+  wazuh_manager_queue:
+  wazuh_agent_state:
+  zeek_logs:

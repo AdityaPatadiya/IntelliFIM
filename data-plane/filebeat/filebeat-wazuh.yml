@@ -1,0 +1,36 @@
+filebeat.inputs:
+  - type: filestream
+    id: wazuh-alerts
+    paths:
+      - /var/ossec/logs/alerts/alerts.json
+    parsers:
+      - ndjson:
+          target: ""
+          add_error_key: true
+
+processors:
+  - drop_fields:
+      fields: ["host", "agent.ephemeral_id", "agent.type", "agent.version", "ecs", "input", "log", "@version"]
+      ignore_missing: true
+
+output.kafka:
+  hosts: ["kafka:9092"]
+  topics:
+    # Route by rule.groups membership: anything with "syscheck" -> wazuh.fim,
+    # anything in the auth groups -> wazuh.auth.
+    - topic: "wazuh.fim"
+      when:
+        contains:
+          rule.groups: "syscheck"
+    - topic: "wazuh.auth"
+      when:
+        or:
+          - contains: { rule.groups: "authentication_success" }
+          - contains: { rule.groups: "authentication_failed" }
+          - contains: { rule.groups: "sudo" }
+          - contains: { rule.groups: "logout" }
+  required_acks: 1
+  partition.hash:
+    hash: ["agent.id"]
+  codec.json:
+    pretty: false

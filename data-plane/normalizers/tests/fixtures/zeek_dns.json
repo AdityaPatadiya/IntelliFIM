@@ -1,0 +1,14 @@
+{
+  "ts": 1746374410.456,
+  "uid": "CHhAvVGS1DHFjwGM10",
+  "id.orig_h": "10.10.0.10",
+  "id.orig_p": 51234,
+  "id.resp_h": "10.10.0.1",
+  "id.resp_p": 53,
+  "proto": "udp",
+  "trans_id": 12345,
+  "query": "example.com",
+  "qtype_name": "A",
+  "rcode_name": "NOERROR",
+  "answers": ["93.184.216.34"]
+}

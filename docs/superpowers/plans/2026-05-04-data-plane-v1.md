@@ -199,6 +199,8 @@ def _minimal_event_dict() -> dict:
     }
 
 
+# --- positive cases ---
+
 def test_canonical_event_required_fields_only():
     event = CanonicalEvent.model_validate(_minimal_event_dict())
     assert event.event_type == "file.modified"
@@ -230,6 +232,17 @@ def test_canonical_event_serialization_roundtrip():
     assert rebuilt.src_ip == IPv4Address("10.0.0.1")
 
 
+def test_canonical_event_accepts_zero_file_size_and_root_uid():
+    """Empty files are valid (size=0). Root is valid (uid=0)."""
+    payload = _minimal_event_dict()
+    payload.update({"file_size_bytes": 0, "user_uid": 0})
+    event = CanonicalEvent.model_validate(payload)
+    assert event.file_size_bytes == 0
+    assert event.user_uid == 0
+
+
+# --- negative cases (enum / IP / required field) ---
+
 def test_canonical_event_rejects_unknown_event_type():
     payload = _minimal_event_dict()
     payload["event_type"] = "file.weird"
@@ -256,6 +269,63 @@ def test_canonical_event_missing_required_field():
     del payload["host_id"]
     with pytest.raises(ValidationError):
         CanonicalEvent.model_validate(payload)
+
+
+# --- negative cases (constraint pinning) ---
+
+def test_canonical_event_rejects_unknown_field():
+    """extra='forbid' is the contract — unknown fields must be rejected."""
+    payload = _minimal_event_dict()
+    payload["mystery_field"] = "boom"
+    with pytest.raises(ValidationError):
+        CanonicalEvent.model_validate(payload)
+
+
+def test_canonical_event_rejects_negative_file_size():
+    payload = _minimal_event_dict()
+    payload["file_size_bytes"] = -1
+    with pytest.raises(ValidationError):
+        CanonicalEvent.model_validate(payload)
+
+
+def test_canonical_event_rejects_negative_user_uid():
+    payload = _minimal_event_dict()
+    payload["user_uid"] = -1
+    with pytest.raises(ValidationError):
+        CanonicalEvent.model_validate(payload)
+
+
+def test_canonical_event_rejects_invalid_pid():
+    """PID 0 is the kernel scheduler; real processes start at 1."""
+    payload = _minimal_event_dict()
+    payload["process_pid"] = 0
+    with pytest.raises(ValidationError):
+        CanonicalEvent.model_validate(payload)
+
+
+def test_canonical_event_rejects_port_out_of_range():
+    for bad_port in (0, 65536, -1):
+        payload = _minimal_event_dict()
+        payload["src_port"] = bad_port
+        with pytest.raises(ValidationError):
+            CanonicalEvent.model_validate(payload)
+
+
+def test_canonical_event_rejects_invalid_sha256():
+    """Must be exactly 64 lowercase hex chars."""
+    for bad_hash in ("hello", "a" * 63, "A" * 64, "g" * 64, "a" * 65):
+        payload = _minimal_event_dict()
+        payload["file_hash_sha256"] = bad_hash
+        with pytest.raises(ValidationError):
+            CanonicalEvent.model_validate(payload)
+
+
+def test_canonical_event_rejects_naive_timestamp():
+    """Timestamps must carry tzinfo to be unambiguous across hosts."""
+    payload = _minimal_event_dict()
+    payload["timestamp"] = datetime(2026, 5, 4, 12, 0, 0).isoformat()  # no tzinfo
+    with pytest.raises(ValidationError):
+        CanonicalEvent.model_validate(payload)
 ```
 
 - [ ] **Step 2: Install the package in editable mode**
@@ -278,12 +348,25 @@ Expected: all six tests fail with `ImportError: cannot import name 'CanonicalEve
 
 ```python
 # data-plane/schemas/src/intellifim_schemas/event.py
-from datetime import datetime
+"""Canonical event schema for IntelliFIM.
+
+This is the contract every downstream sub-project (correlation engine, ML
+inference, scoring, dashboard, response orchestrator) imports. Type
+constraints are deliberately strict: invalid values must be rejected at
+the schema boundary rather than propagated downstream.
+"""
 from ipaddress import IPv4Address, IPv6Address
-from typing import Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    PositiveInt,
+)
 
 EventType = Literal[
     "file.modified",
@@ -309,6 +392,9 @@ Source = Literal[
     "zeek.files",
 ]
 
+Port = Annotated[int, Field(ge=1, le=65535)]
+Sha256Hex = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
 
 class CanonicalEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -319,9 +405,9 @@ class CanonicalEvent(BaseModel):
     source: Source
     schema_version: str = "1.0.0"
 
-    # time
-    timestamp: datetime
-    ingest_timestamp: datetime
+    # time (timezone-aware UTC required so cross-host correlation is unambiguous)
+    timestamp: AwareDatetime
+    ingest_timestamp: AwareDatetime
 
     # host
     host_id: str
@@ -329,24 +415,24 @@ class CanonicalEvent(BaseModel):
 
     # actor
     user: str | None = None
-    user_uid: int | None = None
+    user_uid: NonNegativeInt | None = None       # uid 0 = root
     process_name: str | None = None
-    process_pid: int | None = None
+    process_pid: PositiveInt | None = None       # pid 0 is the kernel scheduler
 
     # file subject
     file_path: str | None = None
-    file_hash_sha256: str | None = None
-    file_size_bytes: int | None = None
+    file_hash_sha256: Sha256Hex | None = None
+    file_size_bytes: NonNegativeInt | None = None  # 0 = empty file is valid
 
     # network subject
     src_ip: IPv4Address | IPv6Address | None = None
-    src_port: int | None = None
+    src_port: Port | None = None
     dst_ip: IPv4Address | IPv6Address | None = None
-    dst_port: int | None = None
+    dst_port: Port | None = None
     protocol: str | None = None
 
-    # passthrough
-    raw: dict = Field(default_factory=dict)
+    # passthrough — the unmodified source event, kept for debugging and XAI
+    raw: dict[str, Any] = Field(default_factory=dict)
 ```
 
 - [ ] **Step 5: Run tests and confirm all pass**
@@ -355,7 +441,7 @@ class CanonicalEvent(BaseModel):
 pytest data-plane/schemas/tests -v
 ```
 
-Expected: 6 passed.
+Expected: 14 passed.
 
 - [ ] **Step 6: Commit**
 
@@ -545,10 +631,6 @@ def _ok_transform(raw: dict) -> CanonicalEvent:
     )
 
 
-def _broken_transform(raw: dict) -> CanonicalEvent:
-    raise KeyError("agent")
-
-
 async def test_loop_transforms_and_publishes():
     consumer = FakeConsumer([{"agent": {"id": "agent-001"}, "syscheck": {"path": "/etc/shadow"}}])
     producer = FakeProducer()
@@ -605,6 +687,41 @@ async def test_loop_skips_validation_failure():
     )
     await loop.run()
     assert producer.published == []
+
+
+async def test_loop_continues_after_producer_failure():
+    """A transient producer error must NOT crash the loop.
+
+    Real Kafka clients raise on broker disconnect / request timeout. The loop
+    must log + skip and keep consuming so the partition does not stall.
+    """
+    consumer = FakeConsumer([
+        {"agent": {"id": "agent-001"}},
+        {"agent": {"id": "agent-002"}},
+        {"agent": {"id": "agent-003"}},
+    ])
+
+    class FlakyProducer:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.published: list[tuple[str, bytes]] = []
+
+        async def send_and_wait(self, topic: str, value: bytes, key: bytes | None = None) -> None:
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("simulated kafka outage")
+            self.published.append((topic, value))
+
+    producer = FlakyProducer()
+    loop = NormalizerLoop(
+        consumer=consumer,
+        producer=producer,
+        output_topic="events.normalized",
+        transform=_ok_transform,
+    )
+    await loop.run()
+    assert producer.calls == 3                 # all three attempted
+    assert len(producer.published) == 2        # 1st + 3rd succeeded; 2nd was dropped
 ```
 
 - [ ] **Step 2: Run tests and confirm they fail**
@@ -623,7 +740,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Any, Callable, Protocol
 
 from pydantic import ValidationError
 
@@ -651,6 +768,12 @@ class NormalizerLoop:
     Per-source normalizers wire in a `transform` callable; the loop
     owns all the error handling and Kafka I/O so the source-specific
     code stays small and trivially testable.
+
+    Offset-commit policy: this loop does NOT call `consumer.commit()`. The
+    consumer is expected to be configured with `enable_auto_commit=True`
+    (the aiokafka default). Together with the log-and-skip error policy,
+    this means: a malformed or unpublishable message is skipped and its
+    offset auto-committed; the partition does not stall.
     """
 
     def __init__(
@@ -673,11 +796,17 @@ class NormalizerLoop:
             event = self._safe_transform(payload)
             if event is None:
                 continue
+            await self._safe_publish(event)
+
+    async def _safe_publish(self, event: CanonicalEvent) -> None:
+        try:
             await self._producer.send_and_wait(
                 self._output_topic,
                 value=event.model_dump_json().encode("utf-8"),
                 key=event.host_id.encode("utf-8"),
             )
+        except Exception as exc:  # noqa: BLE001 - any Kafka error must not crash the loop
+            log.warning("publish failed (%s); skipping event %s", exc, event.event_id)
 
     @staticmethod
     def _extract_payload(message: Any) -> dict | None:
@@ -717,7 +846,7 @@ class NormalizerLoop:
 pytest data-plane/normalizers/tests/test_base.py -v
 ```
 
-Expected: 3 passed.
+Expected: 4 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -809,6 +938,9 @@ async def _run() -> None:
     cfg = NormalizerConfig.from_env()
     transform = _load_transform(cfg.source)
 
+    # auto_offset_reset="latest": on a fresh restart, skip the historical
+    # backlog. v1 is a walking skeleton / live demo. Production should
+    # reconsider this — see plan v2.
     consumer = AIOKafkaConsumer(
         cfg.input_topic,
         bootstrap_servers=cfg.bootstrap_servers,
@@ -822,23 +954,31 @@ async def _run() -> None:
     )
 
     log.info("starting normalizer source=%s in=%s out=%s", cfg.source, cfg.input_topic, cfg.output_topic)
+
+    # Nested try/finally so we clean up only what we successfully started.
+    # If producer.start() raises, the outer finally still stops the consumer.
     await consumer.start()
-    await producer.start()
     try:
-        loop = NormalizerLoop(
-            consumer=consumer,
-            producer=producer,
-            output_topic=cfg.output_topic,
-            transform=transform,
-        )
-        await loop.run()
+        await producer.start()
+        try:
+            loop = NormalizerLoop(
+                consumer=consumer,
+                producer=producer,
+                output_topic=cfg.output_topic,
+                transform=transform,
+            )
+            await loop.run()
+        finally:
+            await producer.stop()
     finally:
         await consumer.stop()
-        await producer.stop()
 
 
 def main() -> None:
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        log.info("shutdown requested")
 
 
 if __name__ == "__main__":
@@ -873,14 +1013,140 @@ Each task in this phase follows the same shape:
 
 Field mappings come from §4 of the spec doc.
 
-### Task 6: `wazuh-fim` normalizer
+### Task 6: `wazuh-fim` normalizer (with shared helpers)
+
+This task introduces the first per-source normalizer. It also extracts a small shared `_helpers.py` module so that Tasks 7-11 don't duplicate timestamp parsing / int conversion / hash lowercasing.
 
 **Files:**
+- Create: `data-plane/normalizers/src/normalizers/_helpers.py` ← shared helpers
+- Create: `data-plane/normalizers/tests/test_helpers.py` ← helper tests
 - Create: `data-plane/normalizers/tests/fixtures/wazuh_fim_modify.json`
 - Create: `data-plane/normalizers/tests/fixtures/wazuh_fim_create.json`
 - Create: `data-plane/normalizers/tests/fixtures/wazuh_fim_delete.json`
 - Create: `data-plane/normalizers/tests/test_wazuh_fim.py`
 - Create: `data-plane/normalizers/src/normalizers/wazuh_fim.py`
+
+#### Sub-phase A: shared helpers
+
+- [ ] **Step A1: Write failing tests for `_helpers.py`**
+
+```python
+# data-plane/normalizers/tests/test_helpers.py
+from datetime import datetime, timezone
+
+import pytest
+
+from normalizers._helpers import maybe_int, maybe_lower, parse_utc
+
+
+# --- maybe_int ---
+
+def test_maybe_int_passes_none_through():
+    assert maybe_int(None) is None
+
+
+def test_maybe_int_treats_empty_string_as_none():
+    assert maybe_int("") is None
+
+
+def test_maybe_int_converts_numeric_string():
+    assert maybe_int("42") == 42
+
+
+def test_maybe_int_passes_int_through():
+    assert maybe_int(42) == 42
+
+
+# --- maybe_lower ---
+
+def test_maybe_lower_passes_none_through():
+    assert maybe_lower(None) is None
+
+
+def test_maybe_lower_lowercases_string():
+    assert maybe_lower("ABC123") == "abc123"
+
+
+# --- parse_utc ---
+
+def test_parse_utc_normalises_utc_timestamp():
+    result = parse_utc("2026-05-04T12:00:00.000+0000")
+    assert result == datetime(2026, 5, 4, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_utc_converts_non_utc_offset_to_utc():
+    """Tz-aware non-UTC input is converted to UTC, not preserved."""
+    result = parse_utc("2026-05-04T17:30:00+05:30")
+    assert result == datetime(2026, 5, 4, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_utc_rejects_naive_timestamp():
+    """A tz-less input would silently use the system local time — refuse it."""
+    with pytest.raises(ValueError, match="missing tz"):
+        parse_utc("2026-05-04T12:00:00")
+```
+
+- [ ] **Step A2: Confirm tests fail**
+
+```bash
+source .venv/bin/activate
+pytest data-plane/normalizers/tests/test_helpers.py -v
+```
+
+Expected: ImportError on `normalizers._helpers`.
+
+- [ ] **Step A3: Implement `_helpers.py`**
+
+```python
+# data-plane/normalizers/src/normalizers/_helpers.py
+"""Per-source normalizer helpers.
+
+These three functions are shared by every per-source normalizer module.
+Centralising them here ensures a single source of truth for the project
+conventions: SHA-256 hashes are lowercase hex, timestamps are UTC
+tz-aware, missing-or-empty integer fields collapse to None.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+
+def maybe_int(value: str | int | None) -> int | None:
+    """Convert string-or-int to int; treat None and "" as missing."""
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def maybe_lower(value: str | None) -> str | None:
+    """Lowercase the string, pass None through unchanged."""
+    if value is None:
+        return None
+    return value.lower()
+
+
+def parse_utc(value: str) -> datetime:
+    """Parse an ISO 8601 timestamp string into a UTC tz-aware datetime.
+
+    Refuses tz-less input — `astimezone()` on a naive datetime would
+    silently apply the system local time of the normalizer container,
+    which would corrupt cross-host correlation downstream.
+    """
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        raise ValueError(f"timestamp missing tz: {value!r}")
+    return parsed.astimezone(timezone.utc)
+```
+
+- [ ] **Step A4: Run tests, confirm 9 pass**
+
+```bash
+pytest data-plane/normalizers/tests/test_helpers.py -v
+```
+
+Expected: 9 passed.
+
+#### Sub-phase B: wazuh-fim normalizer
 
 - [ ] **Step 1: Add the fixtures**
 
@@ -940,6 +1206,8 @@ Field mappings come from §4 of the spec doc.
 
 ```python
 # data-plane/normalizers/tests/test_wazuh_fim.py
+from datetime import timezone
+
 from intellifim_schemas import CanonicalEvent
 
 from normalizers.wazuh_fim import transform
@@ -976,6 +1244,22 @@ def test_delete_event_maps_to_file_deleted(load_fixture):
     assert event.event_type == "file.deleted"
     assert event.file_size_bytes is None
     assert event.file_hash_sha256 is None
+
+
+def test_timestamp_is_normalized_to_utc(load_fixture):
+    """Convention: every canonical event carries a UTC tz-aware timestamp."""
+    raw = load_fixture("wazuh_fim_modify.json")
+    event = transform(raw)
+    assert event.timestamp.tzinfo == timezone.utc
+    assert event.timestamp.isoformat() == "2026-05-04T12:00:00+00:00"
+
+
+def test_sha256_hash_is_lowercased(load_fixture):
+    """Convention: SHA-256 hashes are lowercase hex (Sha256Hex schema constraint)."""
+    raw = load_fixture("wazuh_fim_modify.json")
+    raw["syscheck"]["sha256_after"] = "AB12CD34EF56AB12CD34EF56AB12CD34EF56AB12CD34EF56AB12CD34EF561234"
+    event = transform(raw)
+    assert event.file_hash_sha256 == "ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef561234"
 ```
 
 - [ ] **Step 3: Confirm tests fail**
@@ -997,17 +1281,13 @@ from uuid import uuid4
 
 from intellifim_schemas import CanonicalEvent
 
+from normalizers._helpers import maybe_int, maybe_lower, parse_utc
+
 _EVENT_TYPE_MAP = {
     "added": "file.created",
     "modified": "file.modified",
     "deleted": "file.deleted",
 }
-
-
-def _maybe_int(value: str | int | None) -> int | None:
-    if value is None or value == "":
-        return None
-    return int(value)
 
 
 def transform(raw: dict) -> CanonicalEvent:
@@ -1021,17 +1301,17 @@ def transform(raw: dict) -> CanonicalEvent:
         event_id=uuid4(),
         event_type=_EVENT_TYPE_MAP[syscheck["event"]],
         source="wazuh.fim",
-        timestamp=datetime.fromisoformat(raw["timestamp"].replace("+0000", "+00:00")),
+        timestamp=parse_utc(raw["timestamp"]),
         ingest_timestamp=datetime.now(tz=timezone.utc),
         host_id=agent["id"],
         host_name=agent.get("name"),
         user=user.get("name"),
-        user_uid=_maybe_int(user.get("id")),
+        user_uid=maybe_int(user.get("id")),
         process_name=process.get("name"),
-        process_pid=_maybe_int(process.get("id")),
+        process_pid=maybe_int(process.get("id")),
         file_path=syscheck.get("path"),
-        file_hash_sha256=syscheck.get("sha256_after"),
-        file_size_bytes=_maybe_int(syscheck.get("size_after")),
+        file_hash_sha256=maybe_lower(syscheck.get("sha256_after")),
+        file_size_bytes=maybe_int(syscheck.get("size_after")),
         raw=raw,
     )
 ```
@@ -1042,7 +1322,7 @@ def transform(raw: dict) -> CanonicalEvent:
 pytest data-plane/normalizers/tests/test_wazuh_fim.py -v
 ```
 
-Expected: 3 passed.
+Expected: 5 passed.
 
 - [ ] **Step 6: Commit**
 
@@ -1162,6 +1442,8 @@ from uuid import uuid4
 
 from intellifim_schemas import CanonicalEvent
 
+from normalizers._helpers import maybe_int, parse_utc
+
 # Wazuh ships preconfigured rules for these. IDs may shift between minor
 # versions; map by rule.groups membership for resilience.
 _GROUP_TO_EVENT_TYPE = {
@@ -1177,12 +1459,6 @@ def _classify(rule: dict) -> str | None:
         if group in _GROUP_TO_EVENT_TYPE:
             return _GROUP_TO_EVENT_TYPE[group]
     return None
-
-
-def _maybe_int(value: str | int | None) -> int | None:
-    if value is None or value == "":
-        return None
-    return int(value)
 
 
 def transform(raw: dict) -> CanonicalEvent:
@@ -1204,12 +1480,12 @@ def transform(raw: dict) -> CanonicalEvent:
         event_id=uuid4(),
         event_type=event_type,
         source="wazuh.auth",
-        timestamp=datetime.fromisoformat(raw["timestamp"].replace("+0000", "+00:00")),
+        timestamp=parse_utc(raw["timestamp"]),
         ingest_timestamp=datetime.now(tz=timezone.utc),
         host_id=agent["id"],
         host_name=agent.get("name"),
         user=user,
-        user_uid=_maybe_int(data.get("uid")),
+        user_uid=maybe_int(data.get("uid")),
         src_ip=data.get("srcip"),
         raw=raw,
     )
@@ -1232,12 +1508,75 @@ git commit -m "feat(normalizers): add wazuh-auth normalizer"
 
 ---
 
-### Task 8: `zeek-conn` normalizer
+### Task 8: `zeek-conn` normalizer (extends `_helpers.py`)
+
+Zeek emits timestamps as float UNIX seconds (`ts: 1746374400.123`), which `parse_utc` (string ISO 8601) cannot consume. This task extends `_helpers.py` with `parse_unix_utc(value: float)` so all four Zeek normalizers (Tasks 8-11) share it.
 
 **Files:**
+- Modify: `data-plane/normalizers/src/normalizers/_helpers.py` — add `parse_unix_utc`
+- Modify: `data-plane/normalizers/tests/test_helpers.py` — add 2 tests for `parse_unix_utc`
 - Create: `data-plane/normalizers/tests/fixtures/zeek_conn.json`
 - Create: `data-plane/normalizers/tests/test_zeek_conn.py`
 - Create: `data-plane/normalizers/src/normalizers/zeek_conn.py`
+
+#### Sub-phase A: extend `_helpers.py`
+
+- [ ] **Step A1: Add tests for `parse_unix_utc` to `test_helpers.py`**
+
+Append to the existing test file:
+
+```python
+# --- parse_unix_utc ---
+
+def test_parse_unix_utc_normalises_to_utc():
+    """Zeek emits ts as float seconds since epoch; result is tz-aware UTC."""
+    result = parse_unix_utc(1746374400.0)
+    assert result == datetime(2025, 5, 4, 16, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_unix_utc_preserves_subsecond():
+    result = parse_unix_utc(1746374400.123456)
+    assert result.microsecond == 123456
+    assert result.tzinfo == timezone.utc
+```
+
+Update the import line at the top:
+```python
+from normalizers._helpers import maybe_int, maybe_lower, parse_unix_utc, parse_utc
+```
+
+- [ ] **Step A2: Confirm new tests fail**
+
+```bash
+source .venv/bin/activate
+pytest data-plane/normalizers/tests/test_helpers.py -v
+```
+
+Expected: existing 9 pass, the 2 new ones fail with `ImportError: cannot import name 'parse_unix_utc'`.
+
+- [ ] **Step A3: Add `parse_unix_utc` to `_helpers.py`**
+
+Append after `parse_utc`:
+
+```python
+def parse_unix_utc(value: float) -> datetime:
+    """Parse a UNIX-style float timestamp (seconds since epoch) into a UTC tz-aware datetime.
+
+    Zeek emits its `ts` field as a float; the canonical schema requires
+    a tz-aware datetime, so we normalise to UTC at the boundary.
+    """
+    return datetime.fromtimestamp(value, tz=timezone.utc)
+```
+
+- [ ] **Step A4: Run helper tests, confirm 11 pass**
+
+```bash
+pytest data-plane/normalizers/tests/test_helpers.py -v
+```
+
+Expected: **11 passed**.
+
+#### Sub-phase B: zeek-conn normalizer
 
 - [ ] **Step 1: Add the fixture**
 
@@ -1300,25 +1639,28 @@ from uuid import uuid4
 
 from intellifim_schemas import CanonicalEvent
 
+from normalizers._helpers import parse_unix_utc
+
 ZEEK_HOST_ID = "zeek-sensor"
 
 
-def _ts_to_datetime(ts: float) -> datetime:
-    return datetime.fromtimestamp(ts, tz=timezone.utc)
-
-
 def transform(raw: dict) -> CanonicalEvent:
+    # Assumes Zeek's json-streaming-logs policy: fields like id.orig_h arrive
+    # as flat keys with literal dots, not as nested objects.
     return CanonicalEvent(
         event_id=uuid4(),
         event_type="network.flow",
         source="zeek.conn",
-        timestamp=_ts_to_datetime(raw["ts"]),
+        timestamp=parse_unix_utc(raw["ts"]),
         ingest_timestamp=datetime.now(tz=timezone.utc),
         host_id=ZEEK_HOST_ID,
         src_ip=raw.get("id.orig_h"),
-        src_port=raw.get("id.orig_p"),
+        # `or None`: Zeek records ICMP/ICMPv6/connectionless flows with port 0,
+        # which violates the canonical schema's Port constraint (ge=1). ICMP
+        # has no port — representing as None is honest.
+        src_port=raw.get("id.orig_p") or None,
         dst_ip=raw.get("id.resp_h"),
-        dst_port=raw.get("id.resp_p"),
+        dst_port=raw.get("id.resp_p") or None,
         protocol=raw.get("proto"),
         raw=raw,
     )
@@ -1339,12 +1681,73 @@ git commit -m "feat(normalizers): add zeek-conn normalizer"
 
 ---
 
-### Task 9: `zeek-dns` normalizer
+### Task 9: `zeek-dns` normalizer (consolidates `ZEEK_HOST_ID`)
+
+Task 8 introduced `ZEEK_HOST_ID = "zeek-sensor"` as a module-level constant in `zeek_conn.py`. Tasks 9-11 all need the same constant. Per the "two-callers rule", this task moves `ZEEK_HOST_ID` into `_helpers.py` so all four Zeek normalizers import it from one place.
 
 **Files:**
+- Modify: `data-plane/normalizers/src/normalizers/_helpers.py` — add `ZEEK_HOST_ID` constant
+- Modify: `data-plane/normalizers/src/normalizers/zeek_conn.py` — import `ZEEK_HOST_ID` instead of defining locally
 - Create: `data-plane/normalizers/tests/fixtures/zeek_dns.json`
 - Create: `data-plane/normalizers/tests/test_zeek_dns.py`
 - Create: `data-plane/normalizers/src/normalizers/zeek_dns.py`
+
+#### Sub-phase A: hoist `ZEEK_HOST_ID`
+
+- [ ] **Step A1: Append `ZEEK_HOST_ID` to `_helpers.py`**
+
+```python
+
+
+# Zeek runs centrally on a SPAN port (no per-host concept). All Zeek normalizers
+# emit canonical events with this constant as the host_id.
+ZEEK_HOST_ID = "zeek-sensor"
+```
+
+- [ ] **Step A2: Update `zeek_conn.py` to import the constant**
+
+Replace the local constant definition with the import. The new file:
+
+```python
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from intellifim_schemas import CanonicalEvent
+
+from normalizers._helpers import ZEEK_HOST_ID, parse_unix_utc
+
+
+def transform(raw: dict) -> CanonicalEvent:
+    # Assumes Zeek's json-streaming-logs policy: fields like id.orig_h arrive
+    # as flat keys with literal dots, not as nested objects.
+    return CanonicalEvent(
+        event_id=uuid4(),
+        event_type="network.flow",
+        source="zeek.conn",
+        timestamp=parse_unix_utc(raw["ts"]),
+        ingest_timestamp=datetime.now(tz=timezone.utc),
+        host_id=ZEEK_HOST_ID,
+        src_ip=raw.get("id.orig_h"),
+        src_port=raw.get("id.orig_p"),
+        dst_ip=raw.get("id.resp_h"),
+        dst_port=raw.get("id.resp_p"),
+        protocol=raw.get("proto"),
+        raw=raw,
+    )
+```
+
+- [ ] **Step A3: Verify zeek-conn tests still pass**
+
+```bash
+source .venv/bin/activate
+pytest data-plane/normalizers/tests/test_zeek_conn.py -v
+```
+
+Expected: 1 passed.
+
+#### Sub-phase B: zeek-dns normalizer
 
 - [ ] **Step 1: Add the fixture**
 
@@ -1407,19 +1810,17 @@ from uuid import uuid4
 
 from intellifim_schemas import CanonicalEvent
 
-ZEEK_HOST_ID = "zeek-sensor"
-
-
-def _ts_to_datetime(ts: float) -> datetime:
-    return datetime.fromtimestamp(ts, tz=timezone.utc)
+from normalizers._helpers import ZEEK_HOST_ID, parse_unix_utc
 
 
 def transform(raw: dict) -> CanonicalEvent:
+    # Assumes Zeek's json-streaming-logs policy: fields like id.orig_h arrive
+    # as flat keys with literal dots, not as nested objects.
     return CanonicalEvent(
         event_id=uuid4(),
         event_type="network.dns_query",
         source="zeek.dns",
-        timestamp=_ts_to_datetime(raw["ts"]),
+        timestamp=parse_unix_utc(raw["ts"]),
         ingest_timestamp=datetime.now(tz=timezone.utc),
         host_id=ZEEK_HOST_ID,
         src_ip=raw.get("id.orig_h"),
@@ -1513,19 +1914,17 @@ from uuid import uuid4
 
 from intellifim_schemas import CanonicalEvent
 
-ZEEK_HOST_ID = "zeek-sensor"
-
-
-def _ts_to_datetime(ts: float) -> datetime:
-    return datetime.fromtimestamp(ts, tz=timezone.utc)
+from normalizers._helpers import ZEEK_HOST_ID, parse_unix_utc
 
 
 def transform(raw: dict) -> CanonicalEvent:
+    # Assumes Zeek's json-streaming-logs policy: fields like id.orig_h arrive
+    # as flat keys with literal dots, not as nested objects.
     return CanonicalEvent(
         event_id=uuid4(),
         event_type="network.http_request",
         source="zeek.http",
-        timestamp=_ts_to_datetime(raw["ts"]),
+        timestamp=parse_unix_utc(raw["ts"]),
         ingest_timestamp=datetime.now(tz=timezone.utc),
         host_id=ZEEK_HOST_ID,
         src_ip=raw.get("id.orig_h"),
@@ -1624,11 +2023,7 @@ from uuid import uuid4
 
 from intellifim_schemas import CanonicalEvent
 
-ZEEK_HOST_ID = "zeek-sensor"
-
-
-def _ts_to_datetime(ts: float) -> datetime:
-    return datetime.fromtimestamp(ts, tz=timezone.utc)
+from normalizers._helpers import ZEEK_HOST_ID, maybe_lower, parse_unix_utc
 
 
 def _first(items: list | None) -> str | None:
@@ -1642,13 +2037,13 @@ def transform(raw: dict) -> CanonicalEvent:
         event_id=uuid4(),
         event_type="network.file_transfer",
         source="zeek.files",
-        timestamp=_ts_to_datetime(raw["ts"]),
+        timestamp=parse_unix_utc(raw["ts"]),
         ingest_timestamp=datetime.now(tz=timezone.utc),
         host_id=ZEEK_HOST_ID,
         src_ip=_first(raw.get("tx_hosts")),
         dst_ip=_first(raw.get("rx_hosts")),
         file_path=raw.get("filename"),
-        file_hash_sha256=raw.get("sha256"),
+        file_hash_sha256=maybe_lower(raw.get("sha256")),
         file_size_bytes=raw.get("seen_bytes"),
         raw=raw,
     )
@@ -1786,7 +2181,10 @@ networks:
 
 services:
   kafka:
-    image: bitnami/kafka:3.7.0
+    # bitnami/kafka moved to a paid Tanzu subscription in mid-2025; the
+    # same images are mirrored at bitnamilegacy/kafka. v2 should pick a
+    # long-term home (Apache or Confluent).
+    image: bitnamilegacy/kafka:3.7.0
     container_name: kafka
     networks: [bus]
     environment:
@@ -1972,12 +2370,21 @@ git commit -m "feat(compose): add Kafka (KRaft) + kafka-ui + topic creation scri
 </ossec_config>
 ```
 
-- [ ] **Step 2: Add an empty `local_rules.xml`** (placeholder for any custom rules later)
+- [ ] **Step 2: Add `local_rules.xml`** (placeholder for any custom rules later)
+
+Wazuh 4.14.5's `wazuh-analysisd` refuses to start if a `<group>` block contains zero rules ("Group 'group' without any rule"), so this template ships with a single never-fires rule that keeps the group non-empty. Replace it with real rules as they're added.
 
 ```xml
 <!-- data-plane/wazuh/manager/local_rules.xml -->
 <group name="local,">
-  <!-- Add custom rules here as needed. -->
+  <!-- IntelliFIM placeholder rule: Wazuh 4.14.5 rejects empty groups.
+       Replace with real rules; do NOT delete this block while the group
+       is otherwise empty. -->
+  <rule id="100000" level="0">
+    <decoded_as>json</decoded_as>
+    <field name="__intellifim_placeholder__">^never$</field>
+    <description>IntelliFIM placeholder rule (never fires).</description>
+  </rule>
 </group>
 ```
 
@@ -2027,7 +2434,7 @@ git commit -m "feat(compose): add Kafka (KRaft) + kafka-ui + topic creation scri
 ```yaml
 # Append inside services: in data-plane/docker-compose.yml
   wazuh-manager:
-    image: wazuh/wazuh-manager:4.7.5
+    image: wazuh/wazuh-manager:4.14.5
     container_name: wazuh-manager
     networks: [bus]
     hostname: wazuh-manager
@@ -2045,7 +2452,7 @@ git commit -m "feat(compose): add Kafka (KRaft) + kafka-ui + topic creation scri
       start_period: 60s
 
   wazuh-agent:
-    image: wazuh/wazuh-agent:4.7.5
+    image: wazuh/wazuh-agent:4.14.5
     container_name: wazuh-agent
     networks: [bus, victims]
     hostname: linux-endpoint-1
@@ -2139,17 +2546,27 @@ redef Log::default_logdir = "/var/log/zeek";
   zeek-sensor:
     image: zeek/zeek:6.0.4
     container_name: zeek-sensor
-    networks: [bus, victims]
+    # Share victim-server's network namespace so Zeek can passively sniff
+    # all traffic to/from victim-server. Docker's bridge driver does NOT
+    # flood unicast frames between sibling containers — a Zeek container
+    # on its own bridge interface (even with NET_ADMIN/NET_RAW + promiscuous
+    # mode) only sees broadcast/multicast (mDNS, SSDP, ICMPv6 RA), not
+    # the curl/HTTP unicast we want to inspect. Sharing the netns is the
+    # standard fix and downstream consumers (Filebeat, Task 16) read Zeek's
+    # logs via the zeek_logs volume mount, not over the network.
+    network_mode: "service:victim-server"
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    depends_on:
+      - victim-server
     volumes:
       - ./zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro
       - zeek_logs:/var/log/zeek
+    # In victim-server's netns the only NIC is eth0 (its sole network).
     command: >
       sh -c "mkdir -p /var/log/zeek &&
-             zeek -i eth1 -C local 'Site::local_nets += {10.10.0.0/24}' &&
-             tail -F /var/log/zeek/conn.log"
+             zeek -i eth0 -C local 'Site::local_nets += {172.18.0.0/16}'"
 
   victim-server:
     image: nginx:1.27-alpine
@@ -2232,15 +2649,18 @@ filebeat.inputs:
           add_error_key: true
 
 processors:
+  # Keep agent.id and agent.name so partition.hash below can use agent.id.
+  # Filebeat runs processors before output, so dropping agent.id here would
+  # break partitioning and Filebeat would silently fall back to round-robin.
   - drop_fields:
-      fields: ["host", "agent.ephemeral_id", "agent.id", "agent.name", "agent.type", "agent.version", "ecs", "input", "log", "@version"]
+      fields: ["host", "agent.ephemeral_id", "agent.type", "agent.version", "ecs", "input", "log", "@version"]
       ignore_missing: true
 
 output.kafka:
   hosts: ["kafka:9092"]
   topics:
-    # Route by rule.groups membership: anything with "syscheck" → wazuh.fim,
-    # anything in the auth groups → wazuh.auth.
+    # Route by rule.groups membership: anything with "syscheck" -> wazuh.fim,
+    # anything in the auth groups -> wazuh.auth.
     - topic: "wazuh.fim"
       when:
         contains:
@@ -2729,7 +3149,7 @@ cd data-plane
 docker compose --env-file .env.dataplane up -d zeek-sensor victim-server victim-client
 sleep 15
 docker exec zeek-sensor sh -c "apt-get update -qq && apt-get install -y -qq tcpdump >/dev/null"
-docker exec zeek-sensor sh -c "timeout 10 tcpdump -i eth1 -w /tmp/http_get_basic.pcap host victim-server and tcp port 80" || true
+docker exec zeek-sensor sh -c "timeout 10 tcpdump -i eth0 -w /tmp/http_get_basic.pcap host victim-server and tcp port 80" || true
 docker cp zeek-sensor:/tmp/http_get_basic.pcap pcaps/http_get_basic.pcap
 docker compose --env-file .env.dataplane down
 ```
@@ -2751,7 +3171,7 @@ network traffic at the Zeek sensor.
 ## Capturing a new pcap
 
 1. Bring up `zeek-sensor` and the victim containers.
-2. `docker exec zeek-sensor tcpdump -i eth1 -w /tmp/<name>.pcap <bpf-filter>`
+2. `docker exec zeek-sensor tcpdump -i eth0 -w /tmp/<name>.pcap <bpf-filter>`
 3. Generate the traffic in another shell.
 4. `docker cp zeek-sensor:/tmp/<name>.pcap pcaps/<name>.pcap`
 5. Add the file to this table.
@@ -2793,8 +3213,8 @@ docker exec zeek-sensor sh -c "command -v tcpreplay >/dev/null 2>&1 || (apt-get 
 echo "copying ${pcap} → zeek-sensor:/tmp/replay.pcap"
 docker cp "${pcap}" zeek-sensor:/tmp/replay.pcap
 
-echo "replaying onto eth1"
-docker exec zeek-sensor tcpreplay -i eth1 -K /tmp/replay.pcap
+echo "replaying onto eth0"
+docker exec zeek-sensor tcpreplay -i eth0 -K /tmp/replay.pcap
 
 docker exec zeek-sensor rm -f /tmp/replay.pcap
 echo "done. Zeek should produce logs within a second; canonical events follow within ~15s."
