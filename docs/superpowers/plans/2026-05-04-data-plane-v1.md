@@ -1442,6 +1442,8 @@ from uuid import uuid4
 
 from intellifim_schemas import CanonicalEvent
 
+from normalizers._helpers import maybe_int, parse_utc
+
 # Wazuh ships preconfigured rules for these. IDs may shift between minor
 # versions; map by rule.groups membership for resilience.
 _GROUP_TO_EVENT_TYPE = {
@@ -1457,12 +1459,6 @@ def _classify(rule: dict) -> str | None:
         if group in _GROUP_TO_EVENT_TYPE:
             return _GROUP_TO_EVENT_TYPE[group]
     return None
-
-
-def _maybe_int(value: str | int | None) -> int | None:
-    if value is None or value == "":
-        return None
-    return int(value)
 
 
 def transform(raw: dict) -> CanonicalEvent:
@@ -1484,12 +1480,12 @@ def transform(raw: dict) -> CanonicalEvent:
         event_id=uuid4(),
         event_type=event_type,
         source="wazuh.auth",
-        timestamp=datetime.fromisoformat(raw["timestamp"].replace("+0000", "+00:00")),
+        timestamp=parse_utc(raw["timestamp"]),
         ingest_timestamp=datetime.now(tz=timezone.utc),
         host_id=agent["id"],
         host_name=agent.get("name"),
         user=user,
-        user_uid=_maybe_int(data.get("uid")),
+        user_uid=maybe_int(data.get("uid")),
         src_ip=data.get("srcip"),
         raw=raw,
     )
