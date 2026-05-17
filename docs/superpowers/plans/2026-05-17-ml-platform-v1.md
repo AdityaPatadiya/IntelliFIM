@@ -734,9 +734,6 @@ git add data-plane/anomaly/src/anomaly/config.py \
 
 ```python
 # data-plane/anomaly/tests/test_train.py
-import pickle
-from pathlib import Path
-
 import numpy as np
 
 from anomaly.features import extract
