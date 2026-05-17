@@ -6,6 +6,7 @@ venv
 .env
 .env.dev
 .env.prod
+.env.docker
 logs
 .venv
 *.egg-info/
