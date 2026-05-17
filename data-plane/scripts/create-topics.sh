@@ -28,4 +28,7 @@ create_topic zeek.files  3 $((7 * 24 * 60 * 60 * 1000))
 # Canonical topic
 create_topic events.normalized 6 $((14 * 24 * 60 * 60 * 1000))
 
+# Correlated topic
+create_topic events.correlated 6 $((14 * 24 * 60 * 60 * 1000))
+
 echo "all topics created"

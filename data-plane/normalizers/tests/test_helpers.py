@@ -64,3 +64,17 @@ def test_parse_unix_utc_preserves_subsecond():
     result = parse_unix_utc(1746374400.123456)
     assert result.microsecond == 123456
     assert result.tzinfo == timezone.utc
+
+
+# --- ZEEK_HOST_ID env override ---
+
+def test_zeek_host_id_defaults_when_env_unset(monkeypatch):
+    monkeypatch.delenv("ZEEK_HOST_ID", raising=False)
+    from normalizers._helpers import _zeek_host_id
+    assert _zeek_host_id() == "zeek-sensor"
+
+
+def test_zeek_host_id_reads_env_override(monkeypatch):
+    monkeypatch.setenv("ZEEK_HOST_ID", "001")
+    from normalizers._helpers import _zeek_host_id
+    assert _zeek_host_id() == "001"

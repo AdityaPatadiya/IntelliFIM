@@ -7,6 +7,7 @@ tz-aware, missing-or-empty integer fields collapse to None.
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 
 
@@ -46,6 +47,18 @@ def parse_unix_utc(value: float) -> datetime:
     return datetime.fromtimestamp(value, tz=timezone.utc)
 
 
+def _zeek_host_id() -> str:
+    """Read ZEEK_HOST_ID from env, default to 'zeek-sensor'.
+
+    In v1 demo Compose, Zeek monitors the victim-server's netns while Wazuh
+    runs in a different container with its own agent_id. For the correlation
+    engine to pair file ↔ network events from the same logical host, the
+    operator overrides ZEEK_HOST_ID to match the Wazuh agent_id (e.g. "001").
+    """
+    return os.environ.get("ZEEK_HOST_ID", "zeek-sensor")
+
+
 # Zeek runs centrally on a SPAN port (no per-host concept). All Zeek normalizers
-# emit canonical events with this constant as the host_id.
-ZEEK_HOST_ID = "zeek-sensor"
+# emit canonical events with this value as host_id. Overridable via env so the
+# operator can align with the Wazuh agent_id of the monitored host.
+ZEEK_HOST_ID = _zeek_host_id()

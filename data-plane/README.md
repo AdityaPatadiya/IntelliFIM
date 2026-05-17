@@ -11,11 +11,12 @@ v3 (HA Kafka, K8s, multi-agent) are explicit follow-ups.
 
 ## What's in the box
 
-15 services on Docker Compose:
+16 services on Docker Compose:
 
 - **Sources:** `wazuh-manager`, `wazuh-agent`, `zeek-sensor`
 - **Shipping:** `filebeat-wazuh`, `filebeat-zeek`
 - **Bus:** `kafka` (single broker, KRaft mode)
+- **Correlation:** `correlation-engine` (per-host file ↔ network time-window join, see [correlator/](correlator/))
 - **Normalizers:** `normalizer-wazuh-fim`, `normalizer-wazuh-auth`,
   `normalizer-zeek-conn`, `normalizer-zeek-dns`, `normalizer-zeek-http`,
   `normalizer-zeek-files`
@@ -82,6 +83,19 @@ A FIM event also fires whenever you write to `monitored/`:
 echo "hello" > monitored/anything.txt
 ```
 
+## See correlations
+
+The correlation engine joins file and network events from the same host
+within ±60 s and publishes matches on `events.correlated`. Tail it:
+
+```bash
+python scripts/tail-correlated.py --bootstrap localhost:9094
+```
+
+Trigger a guaranteed correlation by running `seed-test-traffic.sh` (which
+emits both FIM and network events for the same host) — at least one
+`CorrelatedEvent` should print within ~30 s.
+
 ## Consume canonical events from a downstream service
 
 The canonical schema lives in the `intellifim-schemas` package. Any
@@ -91,7 +105,7 @@ sub-project that consumes events should depend on it directly:
 # pyproject.toml
 [project]
 dependencies = [
-    "intellifim-schemas==0.1.0",
+    "intellifim-schemas>=0.2,<1.0",
     "aiokafka>=0.10",
 ]
 ```
@@ -129,9 +143,13 @@ docker compose --env-file .env.dataplane down -v    # also wipe Kafka data, Wazu
 ```bash
 pip install -e schemas[dev]
 pip install -e normalizers[dev]
-# Both packages declare a `tests/` package, so use importlib mode to
-# avoid pytest's rootdir/import collision.
+pip install -e correlator[dev]
+
+# Each package declares its own `tests/` package, which means a single
+# combined `pytest` call collides on conftest registration. Run them
+# in two passes (each with `--import-mode=importlib`):
 pytest --import-mode=importlib schemas/tests normalizers/tests -v
+pytest --import-mode=importlib correlator/tests -v
 ```
 
 ## Definition of done (v1)
@@ -147,4 +165,8 @@ checkout:
    `events.normalized`.
 4. `scripts/replay-pcap.sh pcaps/http_get_basic.pcap` produces the
    expected zeek.* events.
-5. `pytest --import-mode=importlib schemas/tests normalizers/tests` is green.
+5. Both `pytest --import-mode=importlib schemas/tests normalizers/tests`
+   AND `pytest --import-mode=importlib correlator/tests` are green
+   (see "Running the unit tests" above for why the two-pass form is needed).
+6. `python scripts/tail-correlated.py` prints at least one correlation
+   after running `./scripts/seed-test-traffic.sh`.

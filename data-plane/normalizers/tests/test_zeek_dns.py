@@ -1,5 +1,6 @@
 from intellifim_schemas import CanonicalEvent
 
+from normalizers._helpers import ZEEK_HOST_ID
 from normalizers.zeek_dns import transform
 
 
@@ -9,7 +10,7 @@ def test_dns_maps_to_network_dns_query(load_fixture):
     assert isinstance(event, CanonicalEvent)
     assert event.event_type == "network.dns_query"
     assert event.source == "zeek.dns"
-    assert event.host_id == "zeek-sensor"
+    assert event.host_id == ZEEK_HOST_ID
     assert str(event.src_ip) == "10.10.0.10"
     assert event.src_port == 51234
     assert str(event.dst_ip) == "10.10.0.1"

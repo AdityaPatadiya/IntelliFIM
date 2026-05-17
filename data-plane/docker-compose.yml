@@ -190,6 +190,7 @@ services:
     environment:
       NORMALIZER_SOURCE: "zeek.conn"
       KAFKA_BOOTSTRAP: "kafka:9092"
+      ZEEK_HOST_ID: "001"
 
   normalizer-zeek-dns:
     image: intellifim-normalizer:dev
@@ -201,6 +202,7 @@ services:
     environment:
       NORMALIZER_SOURCE: "zeek.dns"
       KAFKA_BOOTSTRAP: "kafka:9092"
+      ZEEK_HOST_ID: "001"
 
   normalizer-zeek-http:
     image: intellifim-normalizer:dev
@@ -212,6 +214,7 @@ services:
     environment:
       NORMALIZER_SOURCE: "zeek.http"
       KAFKA_BOOTSTRAP: "kafka:9092"
+      ZEEK_HOST_ID: "001"
 
   normalizer-zeek-files:
     image: intellifim-normalizer:dev
@@ -223,6 +226,19 @@ services:
     environment:
       NORMALIZER_SOURCE: "zeek.files"
       KAFKA_BOOTSTRAP: "kafka:9092"
+      ZEEK_HOST_ID: "001"
+
+  correlation-engine:
+    image: intellifim-correlator:dev
+    container_name: correlation-engine
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: "kafka:9092"
+      CORRELATION_WINDOW_SECONDS: "60"
+      CONSUMER_GROUP: "correlation-engine"
 
 volumes:
   kafka_data:

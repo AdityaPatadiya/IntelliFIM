@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "intellifim-normalizers"
-version = "0.1.1"
-description = "Per-source normalizer services that emit canonical events"
+name = "intellifim-correlator"
+version = "0.1.0"
+description = "Per-host time-window correlation engine for IntelliFIM"
 requires-python = ">=3.12"
 dependencies = [
     "intellifim-schemas>=0.2,<1.0",
@@ -20,7 +20,7 @@ dev = [
 ]
 
 [project.scripts]
-intellifim-normalizer = "normalizers.__main__:main"
+intellifim-correlator = "correlator.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
