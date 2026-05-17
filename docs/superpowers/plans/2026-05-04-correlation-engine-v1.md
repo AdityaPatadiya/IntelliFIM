@@ -1357,6 +1357,129 @@ git add data-plane/docker-compose.yml
 
 ---
 
+## Task 8.5: Make `ZEEK_HOST_ID` configurable (surfaced by Task 9 E2E test)
+
+**Why added:** During Task 9's first end-to-end smoke test, the correlator received events from `events.normalized` but emitted ZERO correlations. Diagnosis showed Wazuh FIM events carry `host_id="001"` (the Wazuh agent ID) while Zeek events carry `host_id="zeek-sensor"` (hardcoded module constant). Per `CorrelationEngine`'s contract, `file ↔ network` correlation only fires when `host_id` matches — so no pair could ever match. This is the exact downstream-surfaces-upstream-gap pattern the breadth-first roadmap predicts (cf. the Zeek port-zero fix in PR #43).
+
+**Scope:** Make `ZEEK_HOST_ID` env-overridable in `intellifim-normalizers`, set it to `"001"` (the demo Wazuh agent ID) on the four Zeek normalizer services in Compose, bump the normalizers package patch version, and add a regression test.
+
+**Files:**
+- Modify: `data-plane/normalizers/src/normalizers/_helpers.py` (read env at module load via small function; `import os` at module top to match house style)
+- Modify: `data-plane/normalizers/tests/test_helpers.py` (add env-override test)
+- Modify: `data-plane/normalizers/tests/test_zeek_conn.py` (assert against `ZEEK_HOST_ID` constant, not the literal `"zeek-sensor"`, so the test follows the configured value)
+- Modify: `data-plane/normalizers/tests/test_zeek_dns.py` (same fix)
+- Modify: `data-plane/normalizers/tests/test_zeek_http.py` (same fix)
+- Modify: `data-plane/normalizers/tests/test_zeek_files.py` (same fix)
+- Modify: `data-plane/normalizers/pyproject.toml` (bump `version = "0.1.0"` → `"0.1.1"`)
+- Modify: `data-plane/docker-compose.yml` (add `ZEEK_HOST_ID: "001"` env var to 4 zeek normalizer services)
+
+### Step 1: Update `_helpers.py`
+
+Replace the bottom of `data-plane/normalizers/src/normalizers/_helpers.py` (lines 49-51):
+
+```python
+# Old:
+# Zeek runs centrally on a SPAN port (no per-host concept). All Zeek normalizers
+# emit canonical events with this constant as the host_id.
+ZEEK_HOST_ID = "zeek-sensor"
+```
+
+With:
+
+Also add `import os` to the top of the file (after `from __future__`) — matches house style across `normalizers/config.py`, `normalizers/__main__.py`, `normalizers/base.py`.
+
+```python
+def _zeek_host_id() -> str:
+    """Read ZEEK_HOST_ID from env, default to 'zeek-sensor'.
+
+    In v1 demo Compose, Zeek monitors the victim-server's netns while Wazuh
+    runs in a different container with its own agent_id. For the correlation
+    engine to pair file ↔ network events from the same logical host, the
+    operator overrides ZEEK_HOST_ID to match the Wazuh agent_id (e.g. "001").
+    """
+    return os.environ.get("ZEEK_HOST_ID", "zeek-sensor")
+
+
+# Zeek runs centrally on a SPAN port (no per-host concept). All Zeek normalizers
+# emit canonical events with this value as host_id. Overridable via env so the
+# operator can align with the Wazuh agent_id of the monitored host.
+ZEEK_HOST_ID = _zeek_host_id()
+```
+
+### Step 2: Add a regression test
+
+Append to `data-plane/normalizers/tests/test_helpers.py`:
+
+```python
+# --- ZEEK_HOST_ID env override ---
+
+def test_zeek_host_id_defaults_when_env_unset(monkeypatch):
+    monkeypatch.delenv("ZEEK_HOST_ID", raising=False)
+    from normalizers._helpers import _zeek_host_id
+    assert _zeek_host_id() == "zeek-sensor"
+
+
+def test_zeek_host_id_reads_env_override(monkeypatch):
+    monkeypatch.setenv("ZEEK_HOST_ID", "001")
+    from normalizers._helpers import _zeek_host_id
+    assert _zeek_host_id() == "001"
+```
+
+(Module-level `ZEEK_HOST_ID` is bound at import time — we test the underlying function rather than reloading the module, which is cleaner and matches the established `CorrelatorConfig.from_env()` test style.)
+
+### Step 3: Bump version
+
+In `data-plane/normalizers/pyproject.toml`, change `version = "0.1.0"` → `version = "0.1.1"`.
+
+### Step 4: Update Compose
+
+Add `ZEEK_HOST_ID: "001"` to the `environment:` block of each of the 4 zeek normalizer services in `data-plane/docker-compose.yml`:
+
+```yaml
+    environment:
+      NORMALIZER_SOURCE: "zeek.conn"   # (or zeek.dns / zeek.http / zeek.files for the other three)
+      KAFKA_BOOTSTRAP: "kafka:9092"
+      ZEEK_HOST_ID: "001"
+```
+
+### Step 5: Run the test suite
+
+```bash
+source /home/aditya/Documents/IntelliFIM/.venv/bin/activate
+pip install -e data-plane/normalizers
+pytest --import-mode=importlib data-plane/normalizers/tests -v
+```
+
+Expected: **38 passed** (the original 36 + 2 new tests). The 4 existing Zeek transform tests assert `event.host_id == ZEEK_HOST_ID` (rather than the literal `"zeek-sensor"`), so they follow the configured value and won't silently break if a future CI environment sets `ZEEK_HOST_ID`.
+
+### Step 6: Rebuild the normalizer image
+
+The Compose stack runs `intellifim-normalizer:dev` — we need to rebuild it so the new env-read code is in the container:
+
+```bash
+cd /home/aditya/Documents/IntelliFIM/data-plane
+docker build -f normalizers/Dockerfile -t intellifim-normalizer:dev .
+```
+
+Expected: build succeeds.
+
+### Step 7: Stage
+
+```bash
+git add data-plane/normalizers/src/normalizers/_helpers.py \
+        data-plane/normalizers/tests/test_helpers.py \
+        data-plane/normalizers/tests/test_zeek_conn.py \
+        data-plane/normalizers/tests/test_zeek_dns.py \
+        data-plane/normalizers/tests/test_zeek_http.py \
+        data-plane/normalizers/tests/test_zeek_files.py \
+        data-plane/normalizers/pyproject.toml \
+        data-plane/docker-compose.yml
+```
+
+> Suggested commit: `feat(normalizers): make ZEEK_HOST_ID env-overridable for cross-source correlation`
+
+---
+
 ## Task 9: `tail-correlated.py` consumer
 
 **Files:**

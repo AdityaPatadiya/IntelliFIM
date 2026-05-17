@@ -1,5 +1,6 @@
 from intellifim_schemas import CanonicalEvent
 
+from normalizers._helpers import ZEEK_HOST_ID
 from normalizers.zeek_files import transform
 
 
@@ -9,7 +10,7 @@ def test_files_maps_to_network_file_transfer(load_fixture):
     assert isinstance(event, CanonicalEvent)
     assert event.event_type == "network.file_transfer"
     assert event.source == "zeek.files"
-    assert event.host_id == "zeek-sensor"
+    assert event.host_id == ZEEK_HOST_ID
     assert str(event.src_ip) == "10.10.0.20"   # tx_hosts[0]
     assert str(event.dst_ip) == "10.10.0.10"   # rx_hosts[0]
     assert event.file_path == "index.html"

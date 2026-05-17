@@ -1,5 +1,6 @@
 from intellifim_schemas import CanonicalEvent
 
+from normalizers._helpers import ZEEK_HOST_ID
 from normalizers.zeek_conn import transform
 
 
@@ -9,7 +10,7 @@ def test_conn_maps_to_network_flow(load_fixture):
     assert isinstance(event, CanonicalEvent)
     assert event.event_type == "network.flow"
     assert event.source == "zeek.conn"
-    assert event.host_id == "zeek-sensor"
+    assert event.host_id == ZEEK_HOST_ID
     assert str(event.src_ip) == "10.10.0.10"
     assert event.src_port == 49152
     assert str(event.dst_ip) == "10.10.0.20"
