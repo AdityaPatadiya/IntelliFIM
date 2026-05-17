@@ -58,7 +58,7 @@ data-plane/
 └── README.md                                       ← MODIFY (service count, anomaly section, DoD #7)
 ```
 
-**13 tasks total. ~29 new unit tests (6 schemas + 8 features + 5 config + 3 train + 7 engine) + 1 end-to-end smoke test verifying scoring fires on real seeded traffic.**
+**13 tasks total. ~30 new unit tests (6 schemas + 9 features + 5 config + 3 train + 7 engine) + 1 end-to-end smoke test verifying scoring fires on real seeded traffic.**
 
 ---
 
@@ -545,11 +545,11 @@ is caught at engine startup via the drift guard in engine.py.
 """
 from __future__ import annotations
 
+from datetime import timezone
 from math import log1p
 from typing import get_args
 
-from intellifim_schemas import CanonicalEvent
-from intellifim_schemas.event import EventType, Source
+from intellifim_schemas import CanonicalEvent, EventType, Source
 
 _EVENT_TYPES: tuple[str, ...] = get_args(EventType)
 _SOURCES: tuple[str, ...] = get_args(Source)
@@ -561,9 +561,13 @@ def _key(prefix: str, value: str) -> str:
 
 
 def extract(event: CanonicalEvent) -> dict[str, float]:
+    # Normalize to UTC so hour/day are comparable across hosts even if a future
+    # ingestor ever ships a non-UTC AwareDatetime. Today every normalizer
+    # emits UTC, but the feature definition shouldn't silently depend on that.
+    ts = event.timestamp.astimezone(timezone.utc)
     features: dict[str, float] = {
-        "hour_of_day": float(event.timestamp.hour),
-        "day_of_week": float(event.timestamp.weekday()),
+        "hour_of_day": float(ts.hour),
+        "day_of_week": float(ts.weekday()),
         "log_file_size": log1p(event.file_size_bytes or 0),
         "src_port": float(event.src_port or 0),
         "dst_port": float(event.dst_port or 0),
@@ -575,13 +579,13 @@ def extract(event: CanonicalEvent) -> dict[str, float]:
     return features
 ```
 
-### Step 4: Run tests, confirm 8 pass
+### Step 4: Run tests, confirm 9 pass
 
 ```bash
 pytest --import-mode=importlib data-plane/anomaly/tests/test_features.py -v
 ```
 
-Expected: **8 passed**.
+Expected: **9 passed**. (8 from the original spec + 1 added during code review: `test_non_utc_timestamp_normalized_to_utc` — defense-in-depth regression test for the UTC normalization that prevents silent feature drift if a future ingestor ships a non-UTC AwareDatetime.)
 
 ### Step 5: Stage
 
@@ -1532,7 +1536,7 @@ Expected: **7 passed**.
 pytest --import-mode=importlib data-plane/anomaly/tests -v
 ```
 
-Expected: 8 features + 5 config + 3 train + 7 engine = **23 passed**.
+Expected: 9 features + 5 config + 3 train + 7 engine = **24 passed**.
 
 ### Step 6: Stage
 
@@ -2070,7 +2074,7 @@ source .venv/bin/activate
 pytest --import-mode=importlib data-plane/schemas/tests data-plane/normalizers/tests
 pytest --import-mode=importlib data-plane/correlator/tests
 pytest --import-mode=importlib data-plane/anomaly/tests
-# Expected totals: ~64 + 20 + 23 = ~107 passed
+# Expected totals: ~64 + 20 + 24 = ~108 passed
 
 # DoD #6: correlations
 cd /home/aditya/Documents/IntelliFIM/data-plane
