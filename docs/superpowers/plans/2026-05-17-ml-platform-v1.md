@@ -943,7 +943,7 @@ async def _capture(bootstrap: str, target_count: int, max_seconds: int, output: 
     captured = 0
     by_source: Counter[str] = Counter()
     by_event_type: Counter[str] = Counter()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     deadline = loop.time() + max_seconds
 
     try:
