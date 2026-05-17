@@ -1155,7 +1155,6 @@ import pytest
 from intellifim_schemas import ScoredEvent
 
 from anomaly.engine import AnomalyEngine
-from anomaly.features import extract
 from anomaly.train import train
 
 
@@ -1241,7 +1240,7 @@ async def test_engine_scores_event_and_publishes(make_event):
     assert set(rebuilt.features.keys()) == set(bundle["feature_names"])
 
 
-async def test_engine_threshold_boundary_inclusive(make_event, monkeypatch):
+async def test_engine_threshold_boundary_inclusive(make_event):
     """is_anomaly must be True when anomaly_score == threshold (>= boundary)."""
     bundle = _fit_model(make_event)
     event = make_event()
