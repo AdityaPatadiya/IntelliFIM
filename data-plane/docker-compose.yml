@@ -240,6 +240,18 @@ services:
       CORRELATION_WINDOW_SECONDS: "60"
       CONSUMER_GROUP: "correlation-engine"
 
+  anomaly-detector:
+    image: intellifim-anomaly-detector:dev
+    container_name: anomaly-detector
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: "kafka:9092"
+      CONSUMER_GROUP: "anomaly-detector"
+      ANOMALY_THRESHOLD: "0.5"
+
 volumes:
   kafka_data:
   wazuh_manager_data:
