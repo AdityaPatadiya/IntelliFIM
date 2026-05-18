@@ -38,8 +38,10 @@ cd data-plane
 cp .env.dataplane.example .env.dataplane
 mkdir -p monitored
 
-# 2. Build the normalizer image.
+# 2. Build the three service images (normalizer, correlator, anomaly-detector).
 docker build -f normalizers/Dockerfile -t intellifim-normalizer:dev .
+docker build -f correlator/Dockerfile  -t intellifim-correlator:dev .
+docker build -f anomaly/Dockerfile     -t intellifim-anomaly-detector:dev .
 
 # 3. Start everything.
 docker compose --env-file .env.dataplane up -d
