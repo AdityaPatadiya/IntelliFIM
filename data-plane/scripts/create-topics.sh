@@ -31,4 +31,7 @@ create_topic events.normalized 6 $((14 * 24 * 60 * 60 * 1000))
 # Correlated topic
 create_topic events.correlated 6 $((14 * 24 * 60 * 60 * 1000))
 
+# Scored topic
+create_topic events.scored 6 $((14 * 24 * 60 * 60 * 1000))
+
 echo "all topics created"

@@ -11,12 +11,13 @@ v3 (HA Kafka, K8s, multi-agent) are explicit follow-ups.
 
 ## What's in the box
 
-16 services on Docker Compose:
+17 services on Docker Compose:
 
 - **Sources:** `wazuh-manager`, `wazuh-agent`, `zeek-sensor`
 - **Shipping:** `filebeat-wazuh`, `filebeat-zeek`
 - **Bus:** `kafka` (single broker, KRaft mode)
 - **Correlation:** `correlation-engine` (per-host file ↔ network time-window join, see [correlator/](correlator/))
+- **Anomaly detection:** `anomaly-detector` (per-event IsolationForest scoring, see [anomaly/](anomaly/))
 - **Normalizers:** `normalizer-wazuh-fim`, `normalizer-wazuh-auth`,
   `normalizer-zeek-conn`, `normalizer-zeek-dns`, `normalizer-zeek-http`,
   `normalizer-zeek-files`
@@ -37,8 +38,10 @@ cd data-plane
 cp .env.dataplane.example .env.dataplane
 mkdir -p monitored
 
-# 2. Build the normalizer image.
+# 2. Build the three service images (normalizer, correlator, anomaly-detector).
 docker build -f normalizers/Dockerfile -t intellifim-normalizer:dev .
+docker build -f correlator/Dockerfile  -t intellifim-correlator:dev .
+docker build -f anomaly/Dockerfile     -t intellifim-anomaly-detector:dev .
 
 # 3. Start everything.
 docker compose --env-file .env.dataplane up -d
@@ -96,6 +99,22 @@ Trigger a guaranteed correlation by running `seed-test-traffic.sh` (which
 emits both FIM and network events for the same host) — at least one
 `CorrelatedEvent` should print within ~30 s.
 
+## See anomaly scores
+
+The anomaly-detector consumes every CanonicalEvent on `events.normalized`,
+scores it with a pre-trained IsolationForest (model baked into the image
+at build time from `anomaly/training-data/baseline-events.jsonl`), and
+publishes a `ScoredEvent` to `events.scored`. Tail it:
+
+```bash
+python scripts/tail-scored.py --bootstrap localhost:9094
+```
+
+Each line includes `model`, `score` (0.0-1.0 where 1.0 = max anomaly),
+`is_anomaly` (`score >= threshold`), and the embedded source event. The
+threshold defaults to `0.5` and is tunable via the `ANOMALY_THRESHOLD`
+env var on the `anomaly-detector` service in compose.
+
 ## Consume canonical events from a downstream service
 
 The canonical schema lives in the `intellifim-schemas` package. Any
@@ -105,7 +124,7 @@ sub-project that consumes events should depend on it directly:
 # pyproject.toml
 [project]
 dependencies = [
-    "intellifim-schemas>=0.2,<1.0",
+    "intellifim-schemas>=0.3,<1.0",
     "aiokafka>=0.10",
 ]
 ```
@@ -144,12 +163,14 @@ docker compose --env-file .env.dataplane down -v    # also wipe Kafka data, Wazu
 pip install -e schemas[dev]
 pip install -e normalizers[dev]
 pip install -e correlator[dev]
+pip install -e anomaly[dev]
 
 # Each package declares its own `tests/` package, which means a single
 # combined `pytest` call collides on conftest registration. Run them
-# in two passes (each with `--import-mode=importlib`):
+# in three passes (each with `--import-mode=importlib`):
 pytest --import-mode=importlib schemas/tests normalizers/tests -v
 pytest --import-mode=importlib correlator/tests -v
+pytest --import-mode=importlib anomaly/tests -v
 ```
 
 ## Definition of done (v1)
@@ -165,8 +186,12 @@ checkout:
    `events.normalized`.
 4. `scripts/replay-pcap.sh pcaps/http_get_basic.pcap` produces the
    expected zeek.* events.
-5. Both `pytest --import-mode=importlib schemas/tests normalizers/tests`
-   AND `pytest --import-mode=importlib correlator/tests` are green
-   (see "Running the unit tests" above for why the two-pass form is needed).
+5. All three of `pytest --import-mode=importlib schemas/tests normalizers/tests`,
+   `pytest --import-mode=importlib correlator/tests`, AND
+   `pytest --import-mode=importlib anomaly/tests` are green
+   (see "Running the unit tests" above for why the three-pass form is needed).
 6. `python scripts/tail-correlated.py` prints at least one correlation
    after running `./scripts/seed-test-traffic.sh`.
+7. `python scripts/tail-scored.py` prints at least one `ScoredEvent` after
+   running `./scripts/seed-test-traffic.sh` (or `kafka-console-consumer` on
+   `events.scored` finds ≥1 message with `"model_version":"isolation-forest-v1"`).
