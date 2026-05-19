@@ -11,7 +11,7 @@ v3 (HA Kafka, K8s, multi-agent) are explicit follow-ups.
 
 ## What's in the box
 
-20 services on Docker Compose:
+21 services on Docker Compose:
 
 - **Sources:** `wazuh-manager`, `wazuh-agent`, `zeek-sensor`
 - **Shipping:** `filebeat-wazuh`, `filebeat-zeek`
@@ -19,6 +19,7 @@ v3 (HA Kafka, K8s, multi-agent) are explicit follow-ups.
 - **Correlation:** `correlation-engine` (per-host file ↔ network time-window join, see [correlator/](correlator/))
 - **Anomaly detection:** `anomaly-detector` (per-event IsolationForest scoring, see [anomaly/](anomaly/))
 - **Policy & scoring:** `policy-engine` + `opa` + `redis` (per-host dynamic threat score via Rego + sliding window, see [policy/](policy/))
+- **Response orchestration:** `response-orchestrator` (3-tier classifier + SQLite approval store + aiohttp REST API + Wazuh AR dispatch, see [orchestrator/](orchestrator/))
 - **Normalizers:** `normalizer-wazuh-fim`, `normalizer-wazuh-auth`,
   `normalizer-zeek-conn`, `normalizer-zeek-dns`, `normalizer-zeek-http`,
   `normalizer-zeek-files`
@@ -39,11 +40,12 @@ cd data-plane
 cp .env.dataplane.example .env.dataplane
 mkdir -p monitored
 
-# 2. Build the four service images (normalizer, correlator, anomaly-detector, policy).
+# 2. Build the five service images (normalizer, correlator, anomaly-detector, policy, orchestrator).
 docker build -f normalizers/Dockerfile -t intellifim-normalizer:dev .
 docker build -f correlator/Dockerfile  -t intellifim-correlator:dev .
 docker build -f anomaly/Dockerfile     -t intellifim-anomaly-detector:dev .
 docker build -f policy/Dockerfile      -t intellifim-policy:dev .
+docker build -f orchestrator/Dockerfile -t intellifim-orchestrator:dev .
 
 # 3. Start everything.
 docker compose --env-file .env.dataplane up -d
@@ -137,6 +139,42 @@ Edit the Rego policy under `policy/policies/`, then `docker compose
 restart opa` to reload. v1 has no live-reload; v2 will add OPA's
 `--watch` flag.
 
+## Approve a response action
+
+When a `ThreatScoreUpdate` lands with `score >= 30` (default `TIER_LOW_THRESHOLD`),
+the `response-orchestrator` records it as a PENDING approval request in its
+SQLite store. List, inspect, and approve via the REST API on port 8200:
+
+```bash
+# List PENDING requests
+curl -s http://127.0.0.1:8200/approvals | jq
+
+# Inspect one
+curl -s http://127.0.0.1:8200/approvals/<id> | jq
+
+# Approve (synchronous: dispatches `!quarantine0` to the agent via Wazuh API
+#  and returns the terminal state — EXECUTED on success, FAILED on dispatcher error)
+curl -s -X POST http://127.0.0.1:8200/approvals/<id>/approve | jq
+
+# Or reject
+curl -s -X POST http://127.0.0.1:8200/approvals/<id>/reject | jq
+
+# Helper that polls + approves the first PENDING request
+python scripts/approve-pending.py
+```
+
+On approval the orchestrator authenticates against the Wazuh Manager REST API
+(`https://wazuh-manager:55000`, dev creds `wazuh/wazuh`, TLS verify disabled
+for v1) and issues `PUT /active-response` with `command="!quarantine0"`.
+The manager accepts the dispatch and queues it for the agent.
+
+**v1 limitation:** the manager API returns 200 (dispatch accepted) but in
+the current Wazuh 4.14 dev compose the AR command does not propagate to the
+agent's `wazuh-execd`. The orchestrator's contract — authoritative state
+transition + Wazuh API success — is honored; actual `quarantine.sh`
+execution + marker file landing is a v2 target (deeper Wazuh-side AR queue
+investigation needed).
+
 ## Consume canonical events from a downstream service
 
 The canonical schema lives in the `intellifim-schemas` package. Any
@@ -187,14 +225,16 @@ pip install -e normalizers[dev]
 pip install -e correlator[dev]
 pip install -e anomaly[dev]
 pip install -e policy[dev]
+pip install -e orchestrator[dev]
 
 # Each package declares its own `tests/` package, which means a single
 # combined `pytest` call collides on conftest registration. Run them
-# in four passes (each with `--import-mode=importlib`):
+# in five passes (each with `--import-mode=importlib`):
 pytest --import-mode=importlib schemas/tests normalizers/tests -v
 pytest --import-mode=importlib correlator/tests -v
 pytest --import-mode=importlib anomaly/tests -v
 pytest --import-mode=importlib policy/tests -v
+pytest --import-mode=importlib orchestrator/tests -v
 
 # Rego policy tests (requires `opa` CLI or Docker):
 opa test policy/policies/
@@ -232,3 +272,12 @@ checkout:
    after running `./scripts/seed-test-traffic.sh` (or `kafka-console-consumer`
    on `threat.scores` finds ≥1 message with valid `score` field), AND
    `docker exec redis redis-cli ZCARD threat_score:host:001` returns ≥1.
+9. `python scripts/approve-pending.py` against a stack that has been seeded
+   via `./scripts/seed-test-traffic.sh` exits 0 with output containing
+   `"state": "EXECUTED"` and a non-null `executed_at`, AND the Wazuh
+   manager's `api.log` shows the corresponding `PUT /active-response` call
+   returning HTTP 200 (the orchestrator's dispatch contract honored).
+   Marker-file landing on the agent
+   (`docker exec wazuh-agent ls /tmp/intellifim-quarantine-*.flag`) is a
+   v2 target — see the spec's v2 backlog for the Wazuh-side AR propagation
+   investigation needed to close that gap.

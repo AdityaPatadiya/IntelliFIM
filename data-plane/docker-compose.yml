@@ -83,6 +83,7 @@ services:
       - ./wazuh/agent/ossec.conf:/var/ossec/etc/ossec.conf:ro
       - ${FIM_MONITORED_HOST_DIR:-./monitored}:/data/monitored
       - wazuh_agent_state:/var/ossec/queue
+      - ./orchestrator/wazuh-ar/quarantine.sh:/var/ossec/active-response/bin/quarantine.sh:ro
 
   zeek-sensor:
     image: zeek/zeek:6.0.4
@@ -294,6 +295,31 @@ services:
       REDIS_URL: "redis://redis:6379/0"
       THREAT_SCORE_WINDOW_SECONDS: "300"
 
+  response-orchestrator:
+    image: intellifim-orchestrator:dev
+    container_name: response-orchestrator
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      wazuh-manager:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8200:8200"
+    volumes:
+      - orchestrator_data:/data
+    environment:
+      KAFKA_BOOTSTRAP: "kafka:9092"
+      CONSUMER_GROUP: "response-orchestrator"
+      DB_PATH: "/data/approvals.db"
+      API_HOST: "0.0.0.0"
+      API_PORT: "8200"
+      WAZUH_MANAGER_URL: "https://wazuh-manager:55000"
+      WAZUH_API_USER: "wazuh"
+      WAZUH_API_PASSWORD: "wazuh"
+      TIER_LOW_THRESHOLD: "30"
+      TIER_HIGH_THRESHOLD: "70"
+
 volumes:
   kafka_data:
   wazuh_manager_data:
@@ -301,3 +327,4 @@ volumes:
   wazuh_manager_queue:
   wazuh_agent_state:
   zeek_logs:
+  orchestrator_data:

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "intellifim-orchestrator"
+version = "0.1.0"
+description = "Response orchestrator + admin approval workflow for IntelliFIM"
+requires-python = ">=3.12"
+dependencies = [
+    "intellifim-schemas>=0.4,<1.0",
+    "aiokafka>=0.10,<0.12",
+    "pydantic>=2.7,<3",
+    "httpx>=0.27,<0.29",
+    "aiosqlite>=0.20,<0.22",
+    "aiohttp>=3.9,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pytest-asyncio>=0.23,<0.25",
+    "respx>=0.21,<0.23",
+]
+
+[project.scripts]
+intellifim-orchestrator = "orchestrator.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
