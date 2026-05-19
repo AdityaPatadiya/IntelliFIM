@@ -252,6 +252,48 @@ services:
       CONSUMER_GROUP: "anomaly-detector"
       ANOMALY_THRESHOLD: "0.5"
 
+  opa:
+    image: openpolicyagent/opa:latest-debug
+    container_name: opa
+    networks: [bus]
+    command: ["run", "--server", "--addr=:8181", "/policies"]
+    volumes:
+      - ./policy/policies:/policies:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8181/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 6
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    networks: [bus]
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 6
+
+  policy-engine:
+    image: intellifim-policy:dev
+    container_name: policy-engine
+    networks: [bus]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      opa:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: "kafka:9092"
+      CONSUMER_GROUP: "policy-engine"
+      OPA_URL: "http://opa:8181"
+      REDIS_URL: "redis://redis:6379/0"
+      THREAT_SCORE_WINDOW_SECONDS: "300"
+
 volumes:
   kafka_data:
   wazuh_manager_data:

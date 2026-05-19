@@ -34,4 +34,7 @@ create_topic events.correlated 6 $((14 * 24 * 60 * 60 * 1000))
 # Scored topic
 create_topic events.scored 6 $((14 * 24 * 60 * 60 * 1000))
 
+# Threat scores topic
+create_topic threat.scores 6 $((14 * 24 * 60 * 60 * 1000))
+
 echo "all topics created"

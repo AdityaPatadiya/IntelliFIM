@@ -11,13 +11,14 @@ v3 (HA Kafka, K8s, multi-agent) are explicit follow-ups.
 
 ## What's in the box
 
-17 services on Docker Compose:
+20 services on Docker Compose:
 
 - **Sources:** `wazuh-manager`, `wazuh-agent`, `zeek-sensor`
 - **Shipping:** `filebeat-wazuh`, `filebeat-zeek`
 - **Bus:** `kafka` (single broker, KRaft mode)
 - **Correlation:** `correlation-engine` (per-host file ↔ network time-window join, see [correlator/](correlator/))
 - **Anomaly detection:** `anomaly-detector` (per-event IsolationForest scoring, see [anomaly/](anomaly/))
+- **Policy & scoring:** `policy-engine` + `opa` + `redis` (per-host dynamic threat score via Rego + sliding window, see [policy/](policy/))
 - **Normalizers:** `normalizer-wazuh-fim`, `normalizer-wazuh-auth`,
   `normalizer-zeek-conn`, `normalizer-zeek-dns`, `normalizer-zeek-http`,
   `normalizer-zeek-files`
@@ -38,10 +39,11 @@ cd data-plane
 cp .env.dataplane.example .env.dataplane
 mkdir -p monitored
 
-# 2. Build the three service images (normalizer, correlator, anomaly-detector).
+# 2. Build the four service images (normalizer, correlator, anomaly-detector, policy).
 docker build -f normalizers/Dockerfile -t intellifim-normalizer:dev .
 docker build -f correlator/Dockerfile  -t intellifim-correlator:dev .
 docker build -f anomaly/Dockerfile     -t intellifim-anomaly-detector:dev .
+docker build -f policy/Dockerfile      -t intellifim-policy:dev .
 
 # 3. Start everything.
 docker compose --env-file .env.dataplane up -d
@@ -115,6 +117,26 @@ Each line includes `model`, `score` (0.0-1.0 where 1.0 = max anomaly),
 threshold defaults to `0.5` and is tunable via the `ANOMALY_THRESHOLD`
 env var on the `anomaly-detector` service in compose.
 
+## See dynamic threat scores
+
+The policy-engine consumes every `ScoredEvent`, queries OPA for a per-event
+score delta (per the Rego policy at `policy/policies/threat_score.rego`),
+maintains a per-host sliding-window threat score in Redis, and publishes
+`ThreatScoreUpdate` to `threat.scores`. Tail it:
+
+```bash
+python scripts/tail-scores.py --bootstrap localhost:9094
+```
+
+Each line shows `host`, `score` (0-100 sliding-window sum, default 5-min
+window, clamped at 100), `contribs` (count of contributions in the
+window), `last_delta` (this event's OPA decision), and `last_reason`
+(OPA's explanation).
+
+Edit the Rego policy under `policy/policies/`, then `docker compose
+restart opa` to reload. v1 has no live-reload; v2 will add OPA's
+`--watch` flag.
+
 ## Consume canonical events from a downstream service
 
 The canonical schema lives in the `intellifim-schemas` package. Any
@@ -164,13 +186,21 @@ pip install -e schemas[dev]
 pip install -e normalizers[dev]
 pip install -e correlator[dev]
 pip install -e anomaly[dev]
+pip install -e policy[dev]
 
 # Each package declares its own `tests/` package, which means a single
 # combined `pytest` call collides on conftest registration. Run them
-# in three passes (each with `--import-mode=importlib`):
+# in four passes (each with `--import-mode=importlib`):
 pytest --import-mode=importlib schemas/tests normalizers/tests -v
 pytest --import-mode=importlib correlator/tests -v
 pytest --import-mode=importlib anomaly/tests -v
+pytest --import-mode=importlib policy/tests -v
+
+# Rego policy tests (requires `opa` CLI or Docker):
+opa test policy/policies/
+# OR
+docker run --rm -v $(pwd)/policy/policies:/p \
+    openpolicyagent/opa:latest test /p
 ```
 
 ## Definition of done (v1)
@@ -186,12 +216,19 @@ checkout:
    `events.normalized`.
 4. `scripts/replay-pcap.sh pcaps/http_get_basic.pcap` produces the
    expected zeek.* events.
-5. All three of `pytest --import-mode=importlib schemas/tests normalizers/tests`,
-   `pytest --import-mode=importlib correlator/tests`, AND
-   `pytest --import-mode=importlib anomaly/tests` are green
-   (see "Running the unit tests" above for why the three-pass form is needed).
+5. All four of `pytest --import-mode=importlib schemas/tests normalizers/tests`,
+   `pytest --import-mode=importlib correlator/tests`,
+   `pytest --import-mode=importlib anomaly/tests`, AND
+   `pytest --import-mode=importlib policy/tests` are green,
+   PLUS the Rego tests via `opa test policy/policies/` (or the Docker
+   equivalent) report `PASS: 5/5`
+   (see "Running the unit tests" above for why the four-pass form is needed).
 6. `python scripts/tail-correlated.py` prints at least one correlation
    after running `./scripts/seed-test-traffic.sh`.
 7. `python scripts/tail-scored.py` prints at least one `ScoredEvent` after
    running `./scripts/seed-test-traffic.sh` (or `kafka-console-consumer` on
    `events.scored` finds ≥1 message with `"model_version":"isolation-forest-v1"`).
+8. `python scripts/tail-scores.py` prints at least one `ThreatScoreUpdate`
+   after running `./scripts/seed-test-traffic.sh` (or `kafka-console-consumer`
+   on `threat.scores` finds ≥1 message with valid `score` field), AND
+   `docker exec redis redis-cli ZCARD threat_score:host:001` returns ≥1.
