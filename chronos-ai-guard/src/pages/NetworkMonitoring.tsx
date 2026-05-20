@@ -626,10 +626,13 @@ const NetworkMonitoring = () => {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold flex items-center gap-2">
-              <Network className="h-8 w-8" />
-              Network Traffic Analysis
-            </h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold flex items-center gap-2">
+                <Network className="h-8 w-8" />
+                Network Traffic Analysis
+              </h1>
+              <Badge variant="outline">Mock data — v2</Badge>
+            </div>
             <p className="text-muted-foreground">Real-time network monitoring and security alerts</p>
           </div>
           <div className="flex gap-2">

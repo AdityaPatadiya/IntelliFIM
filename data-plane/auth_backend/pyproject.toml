@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "intellifim-auth-backend"
+version = "0.1.0"
+description = "Auth backend (FastAPI + SQLite + JWT) for IntelliFIM"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<0.116",
+    "uvicorn[standard]>=0.30,<0.35",
+    "pydantic[email]>=2.7,<3",  # [email] pulls email-validator for Pydantic's EmailStr
+    "aiosqlite>=0.20,<0.22",
+    "passlib[bcrypt]>=1.7,<2",
+    # bcrypt 4.1+ removed `__about__.__version__` which passlib 1.7.4 reads;
+    # any hash call then raises `ValueError("password cannot be longer than
+    # 72 bytes")` during passlib's wrap-bug detection probe. Pin <4.1 until
+    # passlib 1.8 ships an upstream fix.
+    "bcrypt>=4.0,<4.1",
+    "python-jose[cryptography]>=3.3,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pytest-asyncio>=0.23,<0.25",
+    "httpx>=0.27,<0.29",
+]
+
+[project.scripts]
+intellifim-auth-backend = "auth_backend.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

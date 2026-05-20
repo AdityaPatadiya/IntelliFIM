@@ -70,7 +70,10 @@ const AIAnomaly = () => {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold">AI Anomaly Detection (Row Data Displayed) Dynamic feature comming soon...</h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold">AI Anomaly Detection (Row Data Displayed) Dynamic feature comming soon...</h1>
+              <Badge variant="outline">Mock data — v2</Badge>
+            </div>
             <p className="text-muted-foreground">Machine learning-powered threat detection</p>
           </div>
           <div className="flex gap-2">

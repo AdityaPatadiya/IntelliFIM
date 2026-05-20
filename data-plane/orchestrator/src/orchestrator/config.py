@@ -1,3 +1,4 @@
+# data-plane/orchestrator/src/orchestrator/config.py
 from __future__ import annotations
 
 import os
@@ -18,6 +19,8 @@ class OrchestratorConfig:
     wazuh_api_password: str
     tier_low_threshold: float
     tier_high_threshold: float
+    jwt_secret: str
+    cors_origins: list[str]
     input_topic: str = INPUT_TOPIC
 
     @classmethod
@@ -33,6 +36,13 @@ class OrchestratorConfig:
             raise ValueError(
                 f"TIER_LOW_THRESHOLD ({low}) must be < TIER_HIGH_THRESHOLD ({high})"
             )
+        jwt_secret = os.environ.get("JWT_SECRET")
+        if not jwt_secret:
+            raise ValueError("JWT_SECRET env var is required (no default)")
+        cors_raw = os.environ.get(
+            "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+        )
+        cors_origins = [s.strip() for s in cors_raw.split(",") if s.strip()]
         return cls(
             bootstrap_servers=os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092"),
             consumer_group=os.environ.get("CONSUMER_GROUP", "response-orchestrator"),
@@ -44,6 +54,8 @@ class OrchestratorConfig:
             wazuh_api_password=os.environ.get("WAZUH_API_PASSWORD", "wazuh"),
             tier_low_threshold=low,
             tier_high_threshold=high,
+            jwt_secret=jwt_secret,
+            cors_origins=cors_origins,
         )
 
 
