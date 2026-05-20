@@ -23,7 +23,7 @@ async def _run() -> None:
     cfg = OrchestratorConfig.from_env()
 
     log.info(
-        "starting response-orchestrator in=%s db=%s api=%s:%d wazuh=%s tiers=%.1f/%.1f",
+        "starting response-orchestrator in=%s db=%s api=%s:%d wazuh=%s tiers=%.1f/%.1f jwt=enabled",
         cfg.input_topic, cfg.db_path, cfg.api_host, cfg.api_port,
         cfg.wazuh_manager_url, cfg.tier_low_threshold, cfg.tier_high_threshold,
     )
@@ -45,7 +45,11 @@ async def _run() -> None:
             )
             await consumer.start()
             try:
-                api_app = build_api(store=store, wazuh=wazuh)
+                api_app = build_api(
+                    store=store, wazuh=wazuh,
+                    jwt_secret=cfg.jwt_secret,
+                    cors_origins=cfg.cors_origins,
+                )
                 runner = web.AppRunner(api_app)
                 await runner.setup()
                 site = web.TCPSite(runner, cfg.api_host, cfg.api_port)

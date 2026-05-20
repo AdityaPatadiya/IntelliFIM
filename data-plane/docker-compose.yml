@@ -319,6 +319,72 @@ services:
       WAZUH_API_PASSWORD: "wazuh"
       TIER_LOW_THRESHOLD: "30"
       TIER_HIGH_THRESHOLD: "70"
+      JWT_SECRET: "${JWT_SECRET}"
+      CORS_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8200/healthz', timeout=2).getcode()==200 else 1)\""]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+
+  auth-backend:
+    image: intellifim-auth-backend:dev
+    build:
+      context: .
+      dockerfile: auth_backend/Dockerfile
+    container_name: auth-backend
+    networks: [bus]
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - auth_backend_data:/data
+    environment:
+      DB_PATH: "/data/users.db"
+      API_HOST: "0.0.0.0"
+      API_PORT: "8000"
+      JWT_SECRET: "${JWT_SECRET}"
+      JWT_TTL_SECONDS: "28800"
+      CORS_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"
+      ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD}"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=2).getcode()==200 else 1)\""]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+
+  admin-console:
+    image: chronos-ai-guard:dev
+    build:
+      context: ../chronos-ai-guard
+      dockerfile: Dockerfile
+      target: dev
+    container_name: admin-console
+    networks: [bus]
+    depends_on:
+      auth-backend:
+        condition: service_healthy
+      response-orchestrator:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:5173:8080"
+    volumes:
+      - ../chronos-ai-guard/src:/app/src:ro
+      - ../chronos-ai-guard/public:/app/public:ro
+      - ../chronos-ai-guard/index.html:/app/index.html:ro
+      # Vite needs these at /app root or path aliases (@/), Tailwind classes,
+      # and shadcn imports all break inside the container.
+      - ../chronos-ai-guard/vite.config.ts:/app/vite.config.ts:ro
+      - ../chronos-ai-guard/tsconfig.json:/app/tsconfig.json:ro
+      - ../chronos-ai-guard/tsconfig.app.json:/app/tsconfig.app.json:ro
+      - ../chronos-ai-guard/tsconfig.node.json:/app/tsconfig.node.json:ro
+      - ../chronos-ai-guard/tailwind.config.ts:/app/tailwind.config.ts:ro
+      - ../chronos-ai-guard/postcss.config.js:/app/postcss.config.js:ro
+      - ../chronos-ai-guard/components.json:/app/components.json:ro
+    environment:
+      VITE_AUTH_API_URL: "http://localhost:8000"
+      VITE_ORCHESTRATOR_API_URL: "http://localhost:8200"
 
 volumes:
   kafka_data:
@@ -328,3 +394,4 @@ volumes:
   wazuh_agent_state:
   zeek_logs:
   orchestrator_data:
+  auth_backend_data:

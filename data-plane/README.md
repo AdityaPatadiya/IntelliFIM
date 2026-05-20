@@ -11,7 +11,7 @@ v3 (HA Kafka, K8s, multi-agent) are explicit follow-ups.
 
 ## What's in the box
 
-21 services on Docker Compose:
+23 services on Docker Compose:
 
 - **Sources:** `wazuh-manager`, `wazuh-agent`, `zeek-sensor`
 - **Shipping:** `filebeat-wazuh`, `filebeat-zeek`
@@ -20,6 +20,8 @@ v3 (HA Kafka, K8s, multi-agent) are explicit follow-ups.
 - **Anomaly detection:** `anomaly-detector` (per-event IsolationForest scoring, see [anomaly/](anomaly/))
 - **Policy & scoring:** `policy-engine` + `opa` + `redis` (per-host dynamic threat score via Rego + sliding window, see [policy/](policy/))
 - **Response orchestration:** `response-orchestrator` (3-tier classifier + SQLite approval store + aiohttp REST API + Wazuh AR dispatch, see [orchestrator/](orchestrator/))
+- **Auth backend:** `auth-backend` (FastAPI + SQLite + HS256 JWT, seeds admin from env, see [auth_backend/](auth_backend/))
+- **Admin console:** `admin-console` (React + Vite + shadcn live wiring of the Response Approvals page, see [../chronos-ai-guard/](../chronos-ai-guard/))
 - **Normalizers:** `normalizer-wazuh-fim`, `normalizer-wazuh-auth`,
   `normalizer-zeek-conn`, `normalizer-zeek-dns`, `normalizer-zeek-http`,
   `normalizer-zeek-files`
@@ -40,17 +42,23 @@ cd data-plane
 cp .env.dataplane.example .env.dataplane
 mkdir -p monitored
 
-# 2. Build the five service images (normalizer, correlator, anomaly-detector, policy, orchestrator).
+# 2. Build the seven service images.
 docker build -f normalizers/Dockerfile -t intellifim-normalizer:dev .
 docker build -f correlator/Dockerfile  -t intellifim-correlator:dev .
 docker build -f anomaly/Dockerfile     -t intellifim-anomaly-detector:dev .
 docker build -f policy/Dockerfile      -t intellifim-policy:dev .
 docker build -f orchestrator/Dockerfile -t intellifim-orchestrator:dev .
+docker build -f auth_backend/Dockerfile -t intellifim-auth-backend:dev .
+docker build -f ../chronos-ai-guard/Dockerfile --target dev \
+    -t chronos-ai-guard:dev ../chronos-ai-guard
 
-# 3. Start everything.
+# 3. Generate JWT_SECRET (idempotent — safe to re-run).
+./scripts/init-secrets.sh
+
+# 4. Start everything.
 docker compose --env-file .env.dataplane up -d
 
-# 4. Create Kafka topics (idempotent — safe to re-run).
+# 5. Create Kafka topics (idempotent — safe to re-run).
 ./scripts/create-topics.sh
 ```
 
@@ -175,6 +183,36 @@ transition + Wazuh API success — is honored; actual `quarantine.sh`
 execution + marker file landing is a v2 target (deeper Wazuh-side AR queue
 investigation needed).
 
+## Use the admin console
+
+Open `http://localhost:5173/auth` in a browser. Log in with the
+credentials from `.env.dataplane` (defaults: `admin@intellifim.dev` /
+`changeme`). Navigate to **Incident Management** (header reads "Response
+Approvals" — same route): PENDING approval requests are polled every
+3 seconds from the orchestrator's `/approvals` endpoint. Click
+**Approve** to dispatch a `!quarantine0` AR command (synchronous; state
+flips to `EXECUTED` within ~3 seconds on success). Click **Reject** to
+close the request without dispatch. Viewers see disabled buttons with a
+tooltip.
+
+The other 8 pages (Dashboard, FileIntegrity, NetworkMonitoring,
+AIAnomaly, EmployeeManagement, SystemConfig, Reports, AuditLogs) still
+render mock data and are tagged with a "Mock data — v2" badge until
+later sub-projects wire them up.
+
+The orchestrator's REST API at `:8200` now requires `Authorization:
+Bearer <jwt>` on every request except `/healthz`. POST `/approve` and
+POST `/reject` additionally require role=admin or role=analyst; viewer
+gets 403. To call the API directly from curl, log in first:
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8000/auth/login \
+    -H 'Content-Type: application/json' \
+    -d '{"email":"admin@intellifim.dev","password":"changeme"}' \
+    | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8200/approvals
+```
+
 ## Consume canonical events from a downstream service
 
 The canonical schema lives in the `intellifim-schemas` package. Any
@@ -226,15 +264,17 @@ pip install -e correlator[dev]
 pip install -e anomaly[dev]
 pip install -e policy[dev]
 pip install -e orchestrator[dev]
+pip install -e auth_backend[dev]
 
 # Each package declares its own `tests/` package, which means a single
 # combined `pytest` call collides on conftest registration. Run them
-# in five passes (each with `--import-mode=importlib`):
+# in six passes (each with `--import-mode=importlib`):
 pytest --import-mode=importlib schemas/tests normalizers/tests -v
 pytest --import-mode=importlib correlator/tests -v
 pytest --import-mode=importlib anomaly/tests -v
 pytest --import-mode=importlib policy/tests -v
 pytest --import-mode=importlib orchestrator/tests -v
+pytest --import-mode=importlib auth_backend/tests -v
 
 # Rego policy tests (requires `opa` CLI or Docker):
 opa test policy/policies/
@@ -281,3 +321,16 @@ checkout:
    (`docker exec wazuh-agent ls /tmp/intellifim-quarantine-*.flag`) is a
    v2 target — see the spec's v2 backlog for the Wazuh-side AR propagation
    investigation needed to close that gap.
+10. After bringing the stack up fresh and seeding traffic:
+    a. `POST http://localhost:8000/auth/login` with the admin credentials
+       returns a JWT `access_token`.
+    b. Opening `http://localhost:5173/auth` in a browser and logging in
+       redirects to the IncidentManagement (now "Response Approvals") page.
+    c. The page lists at least one PENDING approval row (sourced from
+       `GET /approvals` via the JWT).
+    d. Clicking **Approve** on a PENDING row causes the row state to
+       transition to EXECUTED within 3 seconds (the polling interval).
+    e. The Wazuh manager's `api.log` shows the corresponding
+       `PUT /active-response` call returning HTTP 200 (the orchestrator's
+       dispatch contract honored — same v1 limitation as DoD #9 re: marker
+       file landing on the agent).

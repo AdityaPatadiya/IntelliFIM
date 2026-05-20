@@ -1,6 +1,7 @@
 import { DashboardLayout } from '@/components/DashboardLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { FileText, Download } from 'lucide-react';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { mockChartData } from '@/lib/mockData';
@@ -11,7 +12,10 @@ const Reports = () => {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold">Reports & Analytics (Row Data Displayed) Dynamic feature comming soon...</h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold">Reports & Analytics (Row Data Displayed) Dynamic feature comming soon...</h1>
+              <Badge variant="outline">Mock data — v2</Badge>
+            </div>
             <p className="text-muted-foreground">Generate and export security reports</p>
           </div>
           <div className="flex gap-2">

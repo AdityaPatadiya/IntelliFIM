@@ -54,7 +54,10 @@ const AuditLogs = () => {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold">Logs & Audit (Row Data Displayed) Dynamic feature comming soon...</h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold">Logs & Audit (Row Data Displayed) Dynamic feature comming soon...</h1>
+              <Badge variant="outline">Mock data — v2</Badge>
+            </div>
             <p className="text-muted-foreground">System activity and audit trail</p>
           </div>
           <div className="flex gap-2">

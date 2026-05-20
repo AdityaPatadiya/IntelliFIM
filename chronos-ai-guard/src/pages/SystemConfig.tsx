@@ -1,6 +1,7 @@
 import { DashboardLayout } from '@/components/DashboardLayout';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -14,7 +15,10 @@ const SystemConfig = () => {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold">System Configuration</h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold">System Configuration</h1>
+              <Badge variant="outline">Mock data — v2</Badge>
+            </div>
             <p className="text-muted-foreground">Configure system settings and integrations</p>
           </div>
           <Button>

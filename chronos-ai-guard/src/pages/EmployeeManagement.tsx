@@ -260,7 +260,10 @@ const EmployeeManagement = () => {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold">Employee Management</h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold">Employee Management</h1>
+              <Badge variant="outline">Mock data — v2</Badge>
+            </div>
             <p className="text-muted-foreground">Manage your team members and their roles</p>
           </div>
           
