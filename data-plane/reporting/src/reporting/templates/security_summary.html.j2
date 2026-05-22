@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>{{ title }}</title>
+  <style>
+    @page { size: A4; margin: 2cm; }
+    body { font-family: "DejaVu Sans", Helvetica, Arial, sans-serif; color: #1a1a1a; font-size: 11pt; }
+    h1 { font-size: 22pt; margin-bottom: 0.2em; }
+    h2 { font-size: 14pt; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-top: 32px; }
+    .meta { color: #666; font-size: 10pt; margin-bottom: 24px; }
+    .meta div { margin: 2px 0; }
+    .stats { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+    .stat-card { border: 1px solid #ddd; border-radius: 4px; padding: 10px 14px; min-width: 130px; }
+    .stat-card .label { font-size: 9pt; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-card .value { font-size: 18pt; font-weight: bold; }
+    .chart { margin: 16px 0; text-align: center; }
+    .chart img { max-width: 100%; height: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 10pt; margin-top: 8px; }
+    th, td { padding: 6px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: top; }
+    th { background: #f5f5f5; font-weight: 600; text-transform: uppercase; font-size: 9pt; color: #444; }
+    .priority-HIGH { color: #c0392b; font-weight: bold; }
+    .priority-LOW { color: #2980b9; }
+    .state-PENDING { color: #c0a000; }
+    .state-EXECUTED { color: #27ae60; }
+    .state-REJECTED { color: #888; }
+    .state-FAILED { color: #c0392b; }
+    .state-APPROVED { color: #2980b9; }
+    .empty { color: #888; font-style: italic; padding: 12px 0; }
+  </style>
+</head>
+<body>
+  <h1>{{ title }}</h1>
+  <div class="meta">
+    <div><strong>Range:</strong> {{ range_start }} &rarr; {{ range_end }}</div>
+    <div><strong>Generated:</strong> {{ generated_at }} by {{ generated_by }}</div>
+  </div>
+
+  <h2>Executive Summary</h2>
+  <div class="stats">
+    <div class="stat-card">
+      <div class="label">Approvals</div>
+      <div class="value">{{ stats.approvals_total }}</div>
+    </div>
+    {% for state, count in stats.approvals_by_state.items() %}
+      <div class="stat-card">
+        <div class="label">{{ state }}</div>
+        <div class="value">{{ count }}</div>
+      </div>
+    {% endfor %}
+    {% for priority, count in stats.approvals_by_priority.items() %}
+      <div class="stat-card">
+        <div class="label">{{ priority }} priority</div>
+        <div class="value">{{ count }}</div>
+      </div>
+    {% endfor %}
+    <div class="stat-card">
+      <div class="label">Score samples</div>
+      <div class="value">{{ stats.scores_total }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Unique hosts</div>
+      <div class="value">{{ stats.unique_hosts }}</div>
+    </div>
+  </div>
+
+  <h2>Threat Scores &mdash; top hosts by max</h2>
+  <div class="chart">
+    <img src="data:image/svg+xml;base64,{{ chart_svg_b64 }}" alt="Top hosts by max threat score" />
+  </div>
+
+  <h2>Approvals</h2>
+  {% if approvals %}
+    <table>
+      <thead>
+        <tr>
+          <th>Host</th><th>Priority</th><th>State</th><th>Score</th>
+          <th>Created</th><th>Decided</th><th>Decided by</th><th>Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for a in approvals %}
+        <tr>
+          <td>{{ a.host_id }}</td>
+          <td class="priority-{{ a.priority }}">{{ a.priority }}</td>
+          <td class="state-{{ a.state }}">{{ a.state }}</td>
+          <td>{{ "%.1f"|format(a.score) }}</td>
+          <td>{{ a.created_at }}</td>
+          <td>{{ a.decided_at or "" }}</td>
+          <td>{{ a.decided_by or "" }}</td>
+          <td>{{ a.last_reason }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">No approvals in range.</div>
+  {% endif %}
+</body>
+</html>

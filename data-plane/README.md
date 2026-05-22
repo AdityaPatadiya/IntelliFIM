@@ -11,7 +11,7 @@ v3 (HA Kafka, K8s, multi-agent) are explicit follow-ups.
 
 ## What's in the box
 
-23 services on Docker Compose:
+24 services on Docker Compose:
 
 - **Sources:** `wazuh-manager`, `wazuh-agent`, `zeek-sensor`
 - **Shipping:** `filebeat-wazuh`, `filebeat-zeek`
@@ -21,7 +21,8 @@ v3 (HA Kafka, K8s, multi-agent) are explicit follow-ups.
 - **Policy & scoring:** `policy-engine` + `opa` + `redis` (per-host dynamic threat score via Rego + sliding window, see [policy/](policy/))
 - **Response orchestration:** `response-orchestrator` (3-tier classifier + SQLite approval store + aiohttp REST API + Wazuh AR dispatch, see [orchestrator/](orchestrator/))
 - **Auth backend:** `auth-backend` (FastAPI + SQLite + HS256 JWT, seeds admin from env, see [auth_backend/](auth_backend/))
-- **Admin console:** `admin-console` (React + Vite + shadcn live wiring of the Response Approvals page, see [../chronos-ai-guard/](../chronos-ai-guard/))
+- **Admin console:** `admin-console` (React + Vite + shadcn live wiring of the Response Approvals + Reports pages, see [../chronos-ai-guard/](../chronos-ai-guard/))
+- **Reporting:** `reporting` (port 8300; FastAPI + WeasyPrint + Jinja2 + matplotlib PDF generation; consumes `threat.scores` Kafka into local SQLite + fetches `/approvals` from the orchestrator on demand; persistent report store on `reporting_data` volume; see [reporting/](reporting/))
 - **Normalizers:** `normalizer-wazuh-fim`, `normalizer-wazuh-auth`,
   `normalizer-zeek-conn`, `normalizer-zeek-dns`, `normalizer-zeek-http`,
   `normalizer-zeek-files`
@@ -195,10 +196,32 @@ flips to `EXECUTED` within ~3 seconds on success). Click **Reject** to
 close the request without dispatch. Viewers see disabled buttons with a
 tooltip.
 
-The other 8 pages (Dashboard, FileIntegrity, NetworkMonitoring,
-AIAnomaly, EmployeeManagement, SystemConfig, Reports, AuditLogs) still
-render mock data and are tagged with a "Mock data — v2" badge until
-later sub-projects wire them up.
+The **Reports** page is now live (sub-project #7): admins and analysts
+see a "Generate report" card (name + date-range form) plus a "Past
+reports" table. Clicking **Generate PDF** calls
+`POST http://localhost:8300/reports/generate` and the new row appears at
+the top of the list on success. **Download** streams the PDF via
+authenticated blob → hidden anchor (preserves `Authorization: Bearer`).
+Viewers see the table only — no generate form. CSV export is disabled
+with a "v2" tooltip.
+
+The remaining 7 pages (Dashboard, FileIntegrity, NetworkMonitoring,
+AIAnomaly, EmployeeManagement, SystemConfig, AuditLogs) still render
+mock data and are tagged with a "Mock data — v2" badge until later
+sub-projects wire them up.
+
+### Generate a report from the terminal
+
+```bash
+export ADMIN_EMAIL=$(grep ^ADMIN_EMAIL= .env.dataplane | cut -d= -f2-)
+export ADMIN_PASSWORD=$(grep ^ADMIN_PASSWORD= .env.dataplane | cut -d= -f2-)
+./scripts/generate-report.py
+```
+
+Logs in, generates a 24h-window Security Summary PDF, downloads it to
+`/tmp/intellifim-smoke-<uuid>.pdf`. Exit codes: `0` success, `1` login
+failed, `2` generate failed, `3` download failed, `4` missing creds env,
+`5` reporting/auth-backend unreachable.
 
 The orchestrator's REST API at `:8200` now requires `Authorization:
 Bearer <jwt>` on every request except `/healthz`. POST `/approve` and
