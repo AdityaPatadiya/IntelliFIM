@@ -6,6 +6,8 @@ export const AUTH_API_URL =
   (import.meta.env.VITE_AUTH_API_URL as string | undefined) ?? "http://localhost:8000";
 export const ORCH_API_URL =
   (import.meta.env.VITE_ORCHESTRATOR_API_URL as string | undefined) ?? "http://localhost:8200";
+export const REPORTING_API_URL =
+  (import.meta.env.VITE_REPORTING_API_URL as string | undefined) ?? "http://localhost:8300";
 
 export function getToken(): string | null {
   return localStorage.getItem("access_token");
