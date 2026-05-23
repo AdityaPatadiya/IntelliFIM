@@ -1,5 +1,3 @@
-import os
-import tempfile
 from datetime import datetime, timezone
 from typing import Any
 
@@ -30,20 +28,14 @@ class FakeMessage:
         self.value = value
 
 
-async def _make_store():
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    store = ApprovalStore(path)
+async def _make_store(pg_pool):
+    store = ApprovalStore(pool=pg_pool)
     await store.init_schema()
-    return store, path
+    return store
 
 
-async def _cleanup(store, path):
+async def _cleanup(store):
     await store.aclose()
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
 
 
 def test_classify_below_threshold_returns_ignore():
@@ -62,9 +54,9 @@ def test_classify_at_high_threshold_returns_high_urgency():
     assert classify(100.0, low=30.0, high=70.0) is Tier.HIGH_URGENCY
 
 
-async def test_engine_ignores_low_score(make_threat_score_update):
+async def test_engine_ignores_low_score(pg_pool, make_threat_score_update):
     update = make_threat_score_update(score=10.0)
-    store, path = await _make_store()
+    store = await _make_store(pg_pool)
     try:
         engine = OrchestratorEngine(
             consumer=FakeConsumer([update]), store=store,
@@ -73,12 +65,12 @@ async def test_engine_ignores_low_score(make_threat_score_update):
         await engine.run()
         assert await store.list(state="PENDING") == []
     finally:
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_engine_inserts_low_priority(make_threat_score_update):
+async def test_engine_inserts_low_priority(pg_pool, make_threat_score_update):
     update = make_threat_score_update(score=45.0)
-    store, path = await _make_store()
+    store = await _make_store(pg_pool)
     try:
         engine = OrchestratorEngine(
             consumer=FakeConsumer([update]), store=store,
@@ -91,12 +83,12 @@ async def test_engine_inserts_low_priority(make_threat_score_update):
         assert rows[0].host_id == update.host_id
         assert rows[0].score == 45.0
     finally:
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_engine_inserts_high_priority(make_threat_score_update):
+async def test_engine_inserts_high_priority(pg_pool, make_threat_score_update):
     update = make_threat_score_update(score=80.0)
-    store, path = await _make_store()
+    store = await _make_store(pg_pool)
     try:
         engine = OrchestratorEngine(
             consumer=FakeConsumer([update]), store=store,
@@ -107,14 +99,14 @@ async def test_engine_inserts_high_priority(make_threat_score_update):
         assert len(rows) == 1
         assert rows[0].priority == "high"
     finally:
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_engine_dedupes_while_pending(make_threat_score_update):
+async def test_engine_dedupes_while_pending(pg_pool, make_threat_score_update):
     """Second update for same host while PENDING -> ignored."""
     u1 = make_threat_score_update(score=45.0, host_id="001")
     u2 = make_threat_score_update(score=80.0, host_id="001")
-    store, path = await _make_store()
+    store = await _make_store(pg_pool)
     try:
         engine = OrchestratorEngine(
             consumer=FakeConsumer([u1, u2]), store=store,
@@ -125,14 +117,14 @@ async def test_engine_dedupes_while_pending(make_threat_score_update):
         assert len(rows) == 1
         assert rows[0].priority == "low"  # first update wins; no promotion in v1
     finally:
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_engine_accepts_value_bytes(make_threat_score_update):
+async def test_engine_accepts_value_bytes(pg_pool, make_threat_score_update):
     """Production-realistic path: consumer yields a message with .value bytes."""
     update = make_threat_score_update(score=45.0)
     consumer = FakeConsumer([FakeMessage(update.model_dump_json().encode("utf-8"))])
-    store, path = await _make_store()
+    store = await _make_store(pg_pool)
     try:
         engine = OrchestratorEngine(
             consumer=consumer, store=store,
@@ -142,15 +134,15 @@ async def test_engine_accepts_value_bytes(make_threat_score_update):
         rows = await store.list(state="PENDING")
         assert len(rows) == 1
     finally:
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_engine_drops_malformed_json(make_threat_score_update):
+async def test_engine_drops_malformed_json(pg_pool, make_threat_score_update):
     consumer = FakeConsumer([
         FakeMessage(b'{"not":"a ThreatScoreUpdate"}'),
         FakeMessage(None),
     ])
-    store, path = await _make_store()
+    store = await _make_store(pg_pool)
     try:
         engine = OrchestratorEngine(
             consumer=consumer, store=store,
@@ -160,4 +152,4 @@ async def test_engine_drops_malformed_json(make_threat_score_update):
         rows = await store.list(state=None)  # all rows
         assert rows == []
     finally:
-        await _cleanup(store, path)
+        await _cleanup(store)

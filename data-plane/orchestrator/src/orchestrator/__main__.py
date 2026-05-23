@@ -23,13 +23,13 @@ async def _run() -> None:
     cfg = OrchestratorConfig.from_env()
 
     log.info(
-        "starting response-orchestrator in=%s db=%s api=%s:%d wazuh=%s tiers=%.1f/%.1f jwt=enabled",
-        cfg.input_topic, cfg.db_path, cfg.api_host, cfg.api_port,
+        "starting response-orchestrator in=%s database_url=%s api=%s:%d wazuh=%s tiers=%.1f/%.1f jwt=enabled",
+        cfg.input_topic, cfg.database_url, cfg.api_host, cfg.api_port,
         cfg.wazuh_manager_url, cfg.tier_low_threshold, cfg.tier_high_threshold,
     )
     log.info("connecting to Wazuh Manager with TLS verification disabled (dev only)")
 
-    store = ApprovalStore(cfg.db_path)
+    store = ApprovalStore(database_url=cfg.database_url)
     await store.init_schema()
     try:
         wazuh = WazuhClient(

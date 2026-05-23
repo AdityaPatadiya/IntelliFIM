@@ -192,9 +192,9 @@ def build_app(
 
                 await store.insert_report(
                     id=rid, name=body.name,
-                    range_start_iso=body.range_start.isoformat(),
-                    range_end_iso=body.range_end.isoformat(),
-                    generated_at_iso=generated_at.isoformat(),
+                    range_start=body.range_start,
+                    range_end=body.range_end,
+                    generated_at=generated_at,
                     generated_by=principal.username,
                     pdf_path=pdf_path, size_bytes=len(pdf_bytes),
                     approvals_count=len(approvals_in_range),
@@ -255,7 +255,7 @@ def build_app(
                 data = f.read()
         except FileNotFoundError as e:
             raise HTTPException(status_code=500, detail="pdf file missing on disk") from e
-        filename = f"{row.name.replace(' ', '_')}-{row.generated_at[:10]}.pdf"
+        filename = f"{row.name.replace(' ', '_')}-{row.generated_at.strftime('%Y-%m-%d')}.pdf"
         return Response(
             content=data,
             media_type="application/pdf",

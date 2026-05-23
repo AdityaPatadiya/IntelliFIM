@@ -1,5 +1,3 @@
-import os
-import tempfile
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -11,25 +9,19 @@ _T1 = datetime(2026, 5, 19, 12, 0, 5, tzinfo=timezone.utc)
 _T2 = datetime(2026, 5, 19, 12, 0, 10, tzinfo=timezone.utc)
 
 
-async def _make_store():
-    """ApprovalStore backed by a temp SQLite file."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    store = ApprovalStore(path)
+async def _make_store(pg_pool):
+    """ApprovalStore backed by the per-test Postgres pool."""
+    store = ApprovalStore(pool=pg_pool)
     await store.init_schema()
-    return store, path
+    return store
 
 
-async def _cleanup(store, path):
+async def _cleanup(store):
     await store.aclose()
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
 
 
-async def test_insert_if_no_pending_creates_row():
-    store, path = await _make_store()
+async def test_insert_if_no_pending_creates_row(pg_pool):
+    store = await _make_store(pg_pool)
     try:
         uid = uuid4()
         inserted = await store.insert_if_no_pending(
@@ -47,11 +39,11 @@ async def test_insert_if_no_pending_creates_row():
         assert row.state == "PENDING"
         assert row.created_at == _T0.isoformat()
     finally:
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_insert_if_no_pending_dedupes_on_duplicate_id():
-    store, path = await _make_store()
+async def test_insert_if_no_pending_dedupes_on_duplicate_id(pg_pool):
+    store = await _make_store(pg_pool)
     try:
         uid = uuid4()
         first = await store.insert_if_no_pending(
@@ -69,11 +61,11 @@ async def test_insert_if_no_pending_dedupes_on_duplicate_id():
         assert row.priority == "low"  # original row unchanged
         assert row.score == 42.0
     finally:
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_insert_if_no_pending_enforces_per_host_singleton():
-    store, path = await _make_store()
+async def test_insert_if_no_pending_enforces_per_host_singleton(pg_pool):
+    store = await _make_store(pg_pool)
     try:
         first = await store.insert_if_no_pending(
             id=uuid4(), host_id="001", priority="low",
@@ -89,11 +81,11 @@ async def test_insert_if_no_pending_enforces_per_host_singleton():
         rows = await store.list(state="PENDING")
         assert len(rows) == 1
     finally:
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_insert_after_terminal_state_creates_new_row():
-    store, path = await _make_store()
+async def test_insert_after_terminal_state_creates_new_row(pg_pool):
+    store = await _make_store(pg_pool)
     try:
         uid_a = uuid4()
         await store.insert_if_no_pending(
@@ -116,11 +108,11 @@ async def test_insert_after_terminal_state_creates_new_row():
         assert len(rows) == 1
         assert rows[0].id == uid_b
     finally:
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_transition_with_correct_from_state():
-    store, path = await _make_store()
+async def test_transition_with_correct_from_state(pg_pool):
+    store = await _make_store(pg_pool)
     try:
         uid = uuid4()
         await store.insert_if_no_pending(
@@ -136,11 +128,11 @@ async def test_transition_with_correct_from_state():
         assert row.decided_at == _T1.isoformat()
         assert row.decided_by == "curl"
     finally:
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_transition_with_wrong_from_state_returns_none():
-    store, path = await _make_store()
+async def test_transition_with_wrong_from_state_returns_none(pg_pool):
+    store = await _make_store(pg_pool)
     try:
         uid = uuid4()
         await store.insert_if_no_pending(
@@ -157,11 +149,11 @@ async def test_transition_with_wrong_from_state_returns_none():
         row = await store.get(uid)
         assert row.state == "PENDING"
     finally:
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_list_filter_and_get_missing():
-    store, path = await _make_store()
+async def test_list_filter_and_get_missing(pg_pool):
+    store = await _make_store(pg_pool)
     try:
         # Default state=PENDING
         assert await store.list() == []
@@ -178,4 +170,4 @@ async def test_list_filter_and_get_missing():
         all_rows = await store.list(state=None)
         assert len(all_rows) == 1
     finally:
-        await _cleanup(store, path)
+        await _cleanup(store)

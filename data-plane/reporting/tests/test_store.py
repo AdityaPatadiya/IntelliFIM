@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 
 from reporting.store import ReportingStore
 
@@ -12,18 +13,16 @@ from reporting.store import ReportingStore
 _T = datetime(2030, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
 
 
-@pytest.fixture
-async def store(tmp_path):
-    db = tmp_path / "reporting.db"
-    s = ReportingStore(db_path=str(db), reports_dir=str(tmp_path / "reports"))
+@pytest_asyncio.fixture
+async def store(pg_pool, tmp_path):
+    s = ReportingStore(reports_dir=str(tmp_path / "reports"), pool=pg_pool)
     await s.init_schema()
     yield s
     await s.aclose()
 
 
-async def test_init_schema_is_idempotent(tmp_path):
-    db = tmp_path / "reporting.db"
-    s = ReportingStore(db_path=str(db), reports_dir=str(tmp_path / "reports"))
+async def test_init_schema_is_idempotent(pg_pool, tmp_path):
+    s = ReportingStore(reports_dir=str(tmp_path / "reports"), pool=pg_pool)
     await s.init_schema()
     await s.init_schema()   # second call must not raise
     await s.aclose()
@@ -102,15 +101,19 @@ async def test_insert_list_get_delete_report(store):
         f.write(b"%PDF-1.4\n")
 
     await store.insert_report(
-        id=rid1, name="r1", range_start_iso="2030-01-01T00:00:00+00:00",
-        range_end_iso="2030-01-02T00:00:00+00:00",
-        generated_at_iso="2030-01-01T00:00:00+00:00", generated_by="alice",
+        id=rid1, name="r1",
+        range_start=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        range_end=datetime(2030, 1, 2, tzinfo=timezone.utc),
+        generated_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        generated_by="alice",
         pdf_path=pdf_path1, size_bytes=9, approvals_count=2, scores_count=10,
     )
     await store.insert_report(
-        id=rid2, name="r2", range_start_iso="2030-01-02T00:00:00+00:00",
-        range_end_iso="2030-01-03T00:00:00+00:00",
-        generated_at_iso="2030-01-02T00:00:00+00:00", generated_by="bob",
+        id=rid2, name="r2",
+        range_start=datetime(2030, 1, 2, tzinfo=timezone.utc),
+        range_end=datetime(2030, 1, 3, tzinfo=timezone.utc),
+        generated_at=datetime(2030, 1, 2, tzinfo=timezone.utc),
+        generated_by="bob",
         pdf_path=pdf_path2, size_bytes=9, approvals_count=5, scores_count=20,
     )
 
@@ -122,6 +125,7 @@ async def test_insert_list_get_delete_report(store):
     assert fetched is not None
     assert fetched.name == "r1"
     assert fetched.generated_by == "alice"
+    assert fetched.range_start == datetime(2030, 1, 1, tzinfo=timezone.utc)
 
     assert await store.delete_report(rid1) is True
     assert await store.get_report(rid1) is None
@@ -133,9 +137,11 @@ async def test_delete_report_idempotent_on_missing_file(store):
     ghost_path = f"{store.reports_dir}/ghost-{rid}.pdf"
     # Do NOT create the file
     await store.insert_report(
-        id=rid, name="ghost", range_start_iso="2030-01-01T00:00:00+00:00",
-        range_end_iso="2030-01-02T00:00:00+00:00",
-        generated_at_iso="2030-01-01T00:00:00+00:00", generated_by="alice",
+        id=rid, name="ghost",
+        range_start=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        range_end=datetime(2030, 1, 2, tzinfo=timezone.utc),
+        generated_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        generated_by="alice",
         pdf_path=ghost_path, size_bytes=0, approvals_count=0, scores_count=0,
     )
     assert await store.delete_report(rid) is True   # row removed even though file absent

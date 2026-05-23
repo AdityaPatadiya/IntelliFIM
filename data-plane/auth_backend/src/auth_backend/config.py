@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class AuthBackendConfig:
-    db_path: str
+    database_url: str
     api_host: str
     api_port: int
     jwt_secret: str
@@ -21,6 +21,9 @@ class AuthBackendConfig:
         jwt_secret = os.environ.get("JWT_SECRET")
         if not jwt_secret:
             raise ValueError("JWT_SECRET env var is required (no default)")
+        database_url = os.environ.get("DATABASE_URL")
+        if not database_url:
+            raise ValueError("DATABASE_URL env var is required (no default)")
         admin_email = os.environ.get("ADMIN_EMAIL")
         if not admin_email:
             raise ValueError("ADMIN_EMAIL env var is required (no default)")
@@ -31,7 +34,7 @@ class AuthBackendConfig:
             "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
         )
         return cls(
-            db_path=os.environ.get("DB_PATH", "/data/users.db"),
+            database_url=database_url,
             api_host=os.environ.get("API_HOST", "0.0.0.0"),
             api_port=int(os.environ.get("API_PORT", "8000")),
             jwt_secret=jwt_secret,

@@ -10,11 +10,12 @@ def _set_required(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "secret")
     monkeypatch.setenv("KAFKA_BOOTSTRAP", "kafka:9092")
     monkeypatch.setenv("ORCHESTRATOR_URL", "http://response-orchestrator:8200")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://reporting:pw@postgres:5432/reporting")
 
 
 def test_required_fields_have_no_defaults(monkeypatch):
-    """JWT_SECRET, KAFKA_BOOTSTRAP, ORCHESTRATOR_URL are required."""
-    for missing in ("JWT_SECRET", "KAFKA_BOOTSTRAP", "ORCHESTRATOR_URL"):
+    """JWT_SECRET, KAFKA_BOOTSTRAP, ORCHESTRATOR_URL, DATABASE_URL are required."""
+    for missing in ("JWT_SECRET", "KAFKA_BOOTSTRAP", "ORCHESTRATOR_URL", "DATABASE_URL"):
         _set_required(monkeypatch)
         monkeypatch.delenv(missing, raising=False)
         with pytest.raises(ReportingConfigError) as exc:
@@ -28,7 +29,7 @@ def test_defaults_applied_for_optional_fields(monkeypatch):
     assert cfg.jwt_secret == "secret"
     assert cfg.kafka_bootstrap == "kafka:9092"
     assert cfg.orchestrator_url == "http://response-orchestrator:8200"
-    assert cfg.db_path == "/data/reporting.db"
+    assert cfg.database_url == "postgresql://reporting:pw@postgres:5432/reporting"
     assert cfg.reports_dir == "/data/reports"
     assert cfg.bind_host == "0.0.0.0"
     assert cfg.port == 8300
@@ -40,14 +41,14 @@ def test_defaults_applied_for_optional_fields(monkeypatch):
 
 def test_overrides_from_env(monkeypatch):
     _set_required(monkeypatch)
-    monkeypatch.setenv("DB_PATH", "/tmp/reporting.db")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db:5432/other")
     monkeypatch.setenv("REPORTS_DIR", "/tmp/reports")
     monkeypatch.setenv("BIND_HOST", "127.0.0.1")
     monkeypatch.setenv("PORT", "9300")
     monkeypatch.setenv("JWT_TTL_SECONDS", "300")
     monkeypatch.setenv("CORS_ORIGINS", "http://a.example, http://b.example")
     cfg = ReportingConfig.from_env()
-    assert cfg.db_path == "/tmp/reporting.db"
+    assert cfg.database_url == "postgresql://u:p@db:5432/other"
     assert cfg.reports_dir == "/tmp/reports"
     assert cfg.bind_host == "127.0.0.1"
     assert cfg.port == 9300

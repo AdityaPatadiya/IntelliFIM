@@ -60,14 +60,11 @@ def test_extract_score_malformed_returns_none():
 
 
 @pytest.mark.asyncio
-async def test_consumer_writes_to_store(tmp_path):
+async def test_consumer_writes_to_store(pg_pool, tmp_path):
     """`process_one` writes a valid update into the store."""
     from reporting.consumer import KafkaScoreConsumer
 
-    store = ReportingStore(
-        db_path=str(tmp_path / "reporting.db"),
-        reports_dir=str(tmp_path / "reports"),
-    )
+    store = ReportingStore(reports_dir=str(tmp_path / "reports"), pool=pg_pool)
     await store.init_schema()
     try:
         consumer = KafkaScoreConsumer(

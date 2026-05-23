@@ -304,6 +304,28 @@ services:
     ports:
       - "127.0.0.1:9102:9102"
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    networks: [bus]
+    ports:
+      - "127.0.0.1:5433:5432"   # host:5433 to avoid clashing with a local Postgres on 5432
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "${POSTGRES_ROOT_PASSWORD}"
+      POSTGRES_DB: "postgres"
+      POSTGRES_AUTH_PASSWORD: "${POSTGRES_AUTH_PASSWORD}"
+      POSTGRES_ORCH_PASSWORD: "${POSTGRES_ORCH_PASSWORD}"
+      POSTGRES_REPORTING_PASSWORD: "${POSTGRES_REPORTING_PASSWORD}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sh:/docker-entrypoint-initdb.d/01-init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   response-orchestrator:
     image: intellifim-orchestrator:dev
     container_name: response-orchestrator
@@ -313,14 +335,14 @@ services:
         condition: service_healthy
       wazuh-manager:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8200:8200"
-    volumes:
-      - orchestrator_data:/data
     environment:
       KAFKA_BOOTSTRAP: "kafka:9092"
       CONSUMER_GROUP: "response-orchestrator"
-      DB_PATH: "/data/approvals.db"
+      DATABASE_URL: "postgresql://orchestrator:${POSTGRES_ORCH_PASSWORD}@postgres:5432/orchestrator"
       API_HOST: "0.0.0.0"
       API_PORT: "8200"
       WAZUH_MANAGER_URL: "https://wazuh-manager:55000"
@@ -343,12 +365,13 @@ services:
       dockerfile: auth_backend/Dockerfile
     container_name: auth-backend
     networks: [bus]
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8000:8000"
-    volumes:
-      - auth_backend_data:/data
     environment:
-      DB_PATH: "/data/users.db"
+      DATABASE_URL: "postgresql://auth:${POSTGRES_AUTH_PASSWORD}@postgres:5432/auth_backend"
       API_HOST: "0.0.0.0"
       API_PORT: "8000"
       JWT_SECRET: "${JWT_SECRET}"
@@ -377,11 +400,13 @@ services:
         condition: service_healthy
       auth-backend:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       KAFKA_BOOTSTRAP: "kafka:9092"
       JWT_SECRET: "${JWT_SECRET}"
       ORCHESTRATOR_URL: "http://response-orchestrator:8200"
-      DB_PATH: "/data/reporting.db"
+      DATABASE_URL: "postgresql://reporting:${POSTGRES_REPORTING_PASSWORD}@postgres:5432/reporting"
       REPORTS_DIR: "/data/reports"
       CORS_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"
       BIND_HOST: "0.0.0.0"
@@ -526,9 +551,8 @@ volumes:
   wazuh_manager_queue:
   wazuh_agent_state:
   zeek_logs:
-  orchestrator_data:
-  auth_backend_data:
   reporting_data:
+  postgres_data:
   prometheus_data:
   alertmanager_data:
   grafana_data:

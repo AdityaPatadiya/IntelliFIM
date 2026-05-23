@@ -29,7 +29,7 @@ class ReportingConfig:
     jwt_secret: str
     kafka_bootstrap: str
     orchestrator_url: str
-    db_path: str
+    database_url: str
     reports_dir: str
     bind_host: str
     port: int
@@ -40,7 +40,7 @@ class ReportingConfig:
 
     @classmethod
     def from_env(cls) -> "ReportingConfig":
-        for k in ("JWT_SECRET", "KAFKA_BOOTSTRAP", "ORCHESTRATOR_URL"):
+        for k in ("JWT_SECRET", "KAFKA_BOOTSTRAP", "ORCHESTRATOR_URL", "DATABASE_URL"):
             if not os.environ.get(k):
                 raise ReportingConfigError(f"missing required env var: {k}")
 
@@ -58,7 +58,7 @@ class ReportingConfig:
             jwt_secret=os.environ["JWT_SECRET"],
             kafka_bootstrap=os.environ["KAFKA_BOOTSTRAP"],
             orchestrator_url=orchestrator_url,
-            db_path=os.environ.get("DB_PATH", "/data/reporting.db"),
+            database_url=os.environ["DATABASE_URL"],
             reports_dir=os.environ.get("REPORTS_DIR", "/data/reports"),
             bind_host=os.environ.get("BIND_HOST", "0.0.0.0"),
             port=_int_env("PORT", "8300"),

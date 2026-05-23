@@ -1,4 +1,11 @@
-"""FastAPI app factory tests using TestClient + respx for orchestrator mock."""
+"""FastAPI app factory tests using httpx.AsyncClient + ASGITransport + respx.
+
+Per the v2-postgres-migration spec, FastAPI tests construct the
+`ReportingStore` *inside* the test from a fresh `pg_url` so the asyncpg pool
+binds to the same event loop the AsyncClient drives. `TestClient` would
+spin up its own thread+loop and trigger asyncpg's "another operation is in
+progress" race.
+"""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -6,8 +13,9 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
+import pytest_asyncio
 import respx
-from fastapi.testclient import TestClient
+from httpx import ASGITransport
 from jose import jwt
 
 from reporting.api import build_app
@@ -30,34 +38,40 @@ def _make_token(*, username: str, role: str, exp_offset_s: int = 3600) -> str:
     return jwt.encode(payload, _SECRET, algorithm="HS256")
 
 
-@pytest.fixture
-async def deps(tmp_path):
+@pytest_asyncio.fixture
+async def deps(pg_url, tmp_path):
     store = ReportingStore(
-        db_path=str(tmp_path / "reporting.db"),
+        database_url=pg_url,
         reports_dir=str(tmp_path / "reports"),
     )
     await store.init_schema()
     orch = OrchestratorClient(base_url="http://orch:8200")
-    yield store, orch
-    await orch.aclose()
-    await store.aclose()
+    try:
+        yield store, orch
+    finally:
+        await orch.aclose()
+        await store.aclose()
 
 
-def _client(store, orch) -> TestClient:
-    app = build_app(
+def _build(store, orch):
+    return build_app(
         store=store, orchestrator=orch,
         jwt_secret=_SECRET, jwt_ttl_seconds=3600,
         cors_origins=("http://localhost:5173",),
         now=lambda: _T0,
     )
-    return TestClient(app)
+
+
+def _async_client(app) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
 @pytest.mark.asyncio
 async def test_healthz_returns_ok(deps):
     store, orch = deps
-    with _client(store, orch) as c:
-        r = c.get("/healthz")
+    app = _build(store, orch)
+    async with _async_client(app) as c:
+        r = await c.get("/healthz")
         assert r.status_code == 200
         assert r.json() == {"status": "ok"}
 
@@ -65,8 +79,9 @@ async def test_healthz_returns_ok(deps):
 @pytest.mark.asyncio
 async def test_missing_jwt_returns_401(deps):
     store, orch = deps
-    with _client(store, orch) as c:
-        r = c.get("/reports")
+    app = _build(store, orch)
+    async with _async_client(app) as c:
+        r = await c.get("/reports")
         assert r.status_code == 401
         assert "error" in r.json()
 
@@ -74,9 +89,10 @@ async def test_missing_jwt_returns_401(deps):
 @pytest.mark.asyncio
 async def test_viewer_cannot_generate(deps):
     store, orch = deps
+    app = _build(store, orch)
     token = _make_token(username="vix", role="viewer")
-    with _client(store, orch) as c:
-        r = c.post(
+    async with _async_client(app) as c:
+        r = await c.post(
             "/reports/generate",
             headers={"Authorization": f"Bearer {token}"},
             json={
@@ -92,9 +108,10 @@ async def test_viewer_cannot_generate(deps):
 @pytest.mark.asyncio
 async def test_range_too_long_returns_400(deps):
     store, orch = deps
+    app = _build(store, orch)
     token = _make_token(username="alice", role="admin")
-    with _client(store, orch) as c:
-        r = c.post(
+    async with _async_client(app) as c:
+        r = await c.post(
             "/reports/generate",
             headers={"Authorization": f"Bearer {token}"},
             json={
@@ -111,6 +128,7 @@ async def test_range_too_long_returns_400(deps):
 @respx.mock(assert_all_called=True)
 async def test_generate_happy_path(respx_mock, deps, tmp_path):
     store, orch = deps
+    app = _build(store, orch)
     # Insert a couple of scores in range
     await store.insert_score(host_id="001", score=42.0, reason="r", ts=_T0)
     await store.insert_score(host_id="002", score=99.0, reason="r", ts=_T0)
@@ -128,8 +146,8 @@ async def test_generate_happy_path(respx_mock, deps, tmp_path):
         ])
     )
     token = _make_token(username="alice", role="admin")
-    with _client(store, orch) as c:
-        r = c.post(
+    async with _async_client(app) as c:
+        r = await c.post(
             "/reports/generate",
             headers={"Authorization": f"Bearer {token}"},
             json={
@@ -148,7 +166,7 @@ async def test_generate_happy_path(respx_mock, deps, tmp_path):
 
         # Download endpoint returns PDF bytes
         rid = body["id"]
-        r2 = c.get(
+        r2 = await c.get(
             f"/reports/{rid}/download",
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -161,12 +179,13 @@ async def test_generate_happy_path(respx_mock, deps, tmp_path):
 @respx.mock(assert_all_called=True)
 async def test_orchestrator_unreachable_returns_502(respx_mock, deps):
     store, orch = deps
+    app = _build(store, orch)
     respx_mock.get("http://orch:8200/approvals").mock(
         side_effect=httpx.ConnectError("nope")
     )
     token = _make_token(username="alice", role="admin")
-    with _client(store, orch) as c:
-        r = c.post(
+    async with _async_client(app) as c:
+        r = await c.post(
             "/reports/generate",
             headers={"Authorization": f"Bearer {token}"},
             json={
@@ -182,6 +201,7 @@ async def test_orchestrator_unreachable_returns_502(respx_mock, deps):
 @pytest.mark.asyncio
 async def test_delete_admin_only(deps, tmp_path):
     store, orch = deps
+    app = _build(store, orch)
     rid = uuid4()
     pdf_path = f"{tmp_path / 'reports'}/2030-01-01-{rid}.pdf"
     import os
@@ -189,24 +209,32 @@ async def test_delete_admin_only(deps, tmp_path):
     with open(pdf_path, "wb") as f:
         f.write(b"%PDF-1.4\n")
     await store.insert_report(
-        id=rid, name="x", range_start_iso="2030-01-01T00:00:00+00:00",
-        range_end_iso="2030-01-02T00:00:00+00:00",
-        generated_at_iso="2030-01-01T00:00:00+00:00", generated_by="alice",
+        id=rid, name="x",
+        range_start=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        range_end=datetime(2030, 1, 2, tzinfo=timezone.utc),
+        generated_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        generated_by="alice",
         pdf_path=pdf_path, size_bytes=9, approvals_count=0, scores_count=0,
     )
 
     analyst_token = _make_token(username="ann", role="analyst")
     admin_token = _make_token(username="alice", role="admin")
-    with _client(store, orch) as c:
-        r = c.delete(f"/reports/{rid}",
-                     headers={"Authorization": f"Bearer {analyst_token}"})
+    async with _async_client(app) as c:
+        r = await c.delete(
+            f"/reports/{rid}",
+            headers={"Authorization": f"Bearer {analyst_token}"},
+        )
         assert r.status_code == 403
 
-        r = c.delete(f"/reports/{rid}",
-                     headers={"Authorization": f"Bearer {admin_token}"})
+        r = await c.delete(
+            f"/reports/{rid}",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
         assert r.status_code == 200
 
-        r = c.delete(f"/reports/{rid}",
-                     headers={"Authorization": f"Bearer {admin_token}"})
+        r = await c.delete(
+            f"/reports/{rid}",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
         # second delete returns 404 (idempotent: it's gone)
         assert r.status_code == 404

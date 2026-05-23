@@ -1,8 +1,6 @@
 """Prometheus metrics tests for response-orchestrator."""
 from __future__ import annotations
 
-import os
-import tempfile
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -50,20 +48,14 @@ class FakeWazuh:
         self.calls.append((agent_id, command, arguments))
 
 
-async def _make_store():
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    store = ApprovalStore(path)
+async def _make_store(pg_pool):
+    store = ApprovalStore(pool=pg_pool)
     await store.init_schema()
-    return store, path
+    return store
 
 
-async def _cleanup(store, path):
+async def _cleanup(store):
     await store.aclose()
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
 
 
 async def _client(store, wazuh):
@@ -82,8 +74,8 @@ def _counter_value() -> float:
     return val if val is not None else 0.0
 
 
-async def test_metrics_endpoint_returns_prometheus_format():
-    store, path = await _make_store()
+async def test_metrics_endpoint_returns_prometheus_format(pg_pool):
+    store = await _make_store(pg_pool)
     client = await _client(store, FakeWazuh())
     try:
         r = await client.get("/metrics")
@@ -92,11 +84,11 @@ async def test_metrics_endpoint_returns_prometheus_format():
         assert "intellifim_messages_processed_total" in body
     finally:
         await client.close()
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_approve_increments_messages_processed_counter():
-    store, path = await _make_store()
+async def test_approve_increments_messages_processed_counter(pg_pool):
+    store = await _make_store(pg_pool)
     uid = uuid4()
     await store.insert_if_no_pending(
         id=uid, host_id="001", priority="low",
@@ -113,4 +105,4 @@ async def test_approve_increments_messages_processed_counter():
         assert after - before == 1.0
     finally:
         await client.close()
-        await _cleanup(store, path)
+        await _cleanup(store)

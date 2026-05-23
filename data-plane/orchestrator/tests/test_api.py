@@ -1,5 +1,3 @@
-import os
-import tempfile
 from datetime import datetime, timezone
 from datetime import timedelta
 from uuid import uuid4
@@ -48,20 +46,14 @@ class FakeWazuh:
             raise self._raise
 
 
-async def _make_store():
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    store = ApprovalStore(path)
+async def _make_store(pg_pool):
+    store = ApprovalStore(pool=pg_pool)
     await store.init_schema()
-    return store, path
+    return store
 
 
-async def _cleanup(store, path):
+async def _cleanup(store):
     await store.aclose()
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
 
 
 async def _client(store, wazuh):
@@ -72,8 +64,8 @@ async def _client(store, wazuh):
     return client
 
 
-async def test_healthz():
-    store, path = await _make_store()
+async def test_healthz(pg_pool):
+    store = await _make_store(pg_pool)
     client = await _client(store, FakeWazuh())
     try:
         resp = await client.get("/healthz")
@@ -81,11 +73,11 @@ async def test_healthz():
         assert (await resp.json()) == {"status": "ok"}
     finally:
         await client.close()
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_list_approvals_defaults_to_pending():
-    store, path = await _make_store()
+async def test_list_approvals_defaults_to_pending(pg_pool):
+    store = await _make_store(pg_pool)
     uid = uuid4()
     await store.insert_if_no_pending(
         id=uid, host_id="001", priority="low",
@@ -101,11 +93,11 @@ async def test_list_approvals_defaults_to_pending():
         assert body["approvals"][0]["state"] == "PENDING"
     finally:
         await client.close()
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_get_approval_missing_returns_404():
-    store, path = await _make_store()
+async def test_get_approval_missing_returns_404(pg_pool):
+    store = await _make_store(pg_pool)
     client = await _client(store, FakeWazuh())
     try:
         resp = await client.get(f"/approvals/{uuid4()}", headers=_auth_headers())
@@ -113,11 +105,11 @@ async def test_get_approval_missing_returns_404():
         assert (await resp.json()) == {"error": "not found"}
     finally:
         await client.close()
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_approve_happy_path_returns_executed():
-    store, path = await _make_store()
+async def test_approve_happy_path_returns_executed(pg_pool):
+    store = await _make_store(pg_pool)
     uid = uuid4()
     await store.insert_if_no_pending(
         id=uid, host_id="001", priority="low",
@@ -135,11 +127,11 @@ async def test_approve_happy_path_returns_executed():
         assert wazuh.calls == [("001", "!quarantine0", ["-", f'{{"update_id":"{uid}"}}'])]
     finally:
         await client.close()
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_approve_already_decided_returns_409():
-    store, path = await _make_store()
+async def test_approve_already_decided_returns_409(pg_pool):
+    store = await _make_store(pg_pool)
     uid = uuid4()
     await store.insert_if_no_pending(
         id=uid, host_id="001", priority="low",
@@ -158,11 +150,11 @@ async def test_approve_already_decided_returns_409():
         assert body["current_state"] == "REJECTED"
     finally:
         await client.close()
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_reject_flips_state():
-    store, path = await _make_store()
+async def test_reject_flips_state(pg_pool):
+    store = await _make_store(pg_pool)
     uid = uuid4()
     await store.insert_if_no_pending(
         id=uid, host_id="001", priority="low",
@@ -178,11 +170,11 @@ async def test_reject_flips_state():
         assert body["decided_by"] == "alice"
     finally:
         await client.close()
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_approve_dispatcher_fails_returns_failed_state():
-    store, path = await _make_store()
+async def test_approve_dispatcher_fails_returns_failed_state(pg_pool):
+    store = await _make_store(pg_pool)
     uid = uuid4()
     await store.insert_if_no_pending(
         id=uid, host_id="001", priority="low",
@@ -198,11 +190,11 @@ async def test_approve_dispatcher_fails_returns_failed_state():
         assert "simulated outage" in body["error_message"]
     finally:
         await client.close()
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_unauthenticated_returns_401():
-    store, path = await _make_store()
+async def test_unauthenticated_returns_401(pg_pool):
+    store = await _make_store(pg_pool)
     client = await _client(store, FakeWazuh())
     try:
         resp = await client.get("/approvals")
@@ -210,11 +202,11 @@ async def test_unauthenticated_returns_401():
         assert (await resp.json()) == {"error": "unauthorized"}
     finally:
         await client.close()
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_viewer_cannot_approve_returns_403():
-    store, path = await _make_store()
+async def test_viewer_cannot_approve_returns_403(pg_pool):
+    store = await _make_store(pg_pool)
     uid = uuid4()
     await store.insert_if_no_pending(
         id=uid, host_id="001", priority="low",
@@ -233,12 +225,12 @@ async def test_viewer_cannot_approve_returns_403():
         assert body["required_role"] == "admin|analyst"
     finally:
         await client.close()
-        await _cleanup(store, path)
+        await _cleanup(store)
 
 
-async def test_cors_preflight_options_returns_204_without_auth():
+async def test_cors_preflight_options_returns_204_without_auth(pg_pool):
     """Browsers send OPTIONS before the real call; it must not require a Bearer."""
-    store, path = await _make_store()
+    store = await _make_store(pg_pool)
     client = await _client(store, FakeWazuh())
     try:
         resp = await client.options(
@@ -251,4 +243,4 @@ async def test_cors_preflight_options_returns_204_without_auth():
         assert "Authorization" in resp.headers["Access-Control-Allow-Headers"]
     finally:
         await client.close()
-        await _cleanup(store, path)
+        await _cleanup(store)
