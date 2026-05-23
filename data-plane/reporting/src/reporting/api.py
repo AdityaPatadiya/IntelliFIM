@@ -17,9 +17,16 @@ from uuid import UUID, uuid4
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import ValidationError
 
 from reporting.auth import make_get_current_principal, require_roles
+from reporting.metrics import (
+    SERVICE_LABEL,
+    errors_total,
+    messages_processed_total,
+    processing_seconds,
+)
 from reporting.models import (
     GenerateReportRequest,
     Principal,
@@ -59,6 +66,8 @@ def build_app(
     now: Callable[[], datetime] = _default_now,
 ) -> FastAPI:
     app = FastAPI(title="intellifim-reporting", default_response_class=JSONResponse)
+
+    Instrumentator().instrument(app).expose(app)
 
     app.add_middleware(
         CORSMiddleware,
@@ -113,91 +122,100 @@ def build_app(
         request: Request,
         principal: Principal = Depends(admin_or_analyst_dep),
     ) -> ReportMetadata:
-        # Forward the caller's bearer token to the orchestrator
-        auth_header = request.headers.get("authorization", "")
-        jwt_token = auth_header.removeprefix("Bearer ").strip()
-
-        try:
-            approvals = await orchestrator.list_approvals(jwt=jwt_token)
-        except OrchestratorError as e:
-            raise HTTPException(status_code=e.status if e.status >= 500 else 502,
-                                detail=str(e)) from e
-
-        # Filter approvals by date range client-side. Parse `created_at` to
-        # a tz-aware datetime so the comparison is correct regardless of the
-        # offset string format the orchestrator emits.
-        approvals_in_range = []
-        for a in approvals:
+        with processing_seconds.labels(SERVICE_LABEL).time():
             try:
-                created_at = datetime.fromisoformat(a["created_at"])
-            except (KeyError, ValueError):
-                continue   # skip malformed rows rather than crash the report
-            if body.range_start <= created_at < body.range_end:
-                approvals_in_range.append(a)
+                # Forward the caller's bearer token to the orchestrator
+                auth_header = request.headers.get("authorization", "")
+                jwt_token = auth_header.removeprefix("Bearer ").strip()
 
-        scores = await store.query_scores(start=body.range_start, end=body.range_end)
-        top = await store.top_hosts_by_max_score(
-            start=body.range_start, end=body.range_end, limit=10
-        )
+                try:
+                    approvals = await orchestrator.list_approvals(jwt=jwt_token)
+                except OrchestratorError as e:
+                    raise HTTPException(status_code=e.status if e.status >= 500 else 502,
+                                        detail=str(e)) from e
 
-        # Summary stats
-        by_state: dict[str, int] = {}
-        by_priority: dict[str, int] = {}
-        for a in approvals_in_range:
-            by_state[a["state"]] = by_state.get(a["state"], 0) + 1
-            by_priority[a["priority"]] = by_priority.get(a["priority"], 0) + 1
-        unique_hosts = len({s.host_id for s in scores})
+                # Filter approvals by date range client-side. Parse `created_at` to
+                # a tz-aware datetime so the comparison is correct regardless of the
+                # offset string format the orchestrator emits.
+                approvals_in_range = []
+                for a in approvals:
+                    try:
+                        created_at = datetime.fromisoformat(a["created_at"])
+                    except (KeyError, ValueError):
+                        continue   # skip malformed rows rather than crash the report
+                    if body.range_start <= created_at < body.range_end:
+                        approvals_in_range.append(a)
 
-        # Chart → SVG → base64
-        svg_bytes = render_chart(top, title="Top hosts by max threat score")
-        chart_b64 = base64.b64encode(svg_bytes).decode("ascii")
+                scores = await store.query_scores(start=body.range_start, end=body.range_end)
+                top = await store.top_hosts_by_max_score(
+                    start=body.range_start, end=body.range_end, limit=10
+                )
 
-        generated_at = now()
-        rid = uuid4()
-        context: dict[str, Any] = {
-            "title": body.name,
-            "range_start": body.range_start.isoformat(),
-            "range_end": body.range_end.isoformat(),
-            "generated_at": generated_at.isoformat(),
-            "generated_by": principal.username,
-            "stats": {
-                "approvals_total": len(approvals_in_range),
-                "approvals_by_state": by_state,
-                "approvals_by_priority": by_priority,
-                "scores_total": len(scores),
-                "unique_hosts": unique_hosts,
-            },
-            "chart_svg_b64": chart_b64,
-            "approvals": approvals_in_range,
-        }
+                # Summary stats
+                by_state: dict[str, int] = {}
+                by_priority: dict[str, int] = {}
+                for a in approvals_in_range:
+                    by_state[a["state"]] = by_state.get(a["state"], 0) + 1
+                    by_priority[a["priority"]] = by_priority.get(a["priority"], 0) + 1
+                unique_hosts = len({s.host_id for s in scores})
 
-        html = render_html(context)
-        pdf_bytes = render_pdf(html)
+                # Chart → SVG → base64
+                svg_bytes = render_chart(top, title="Top hosts by max threat score")
+                chart_b64 = base64.b64encode(svg_bytes).decode("ascii")
 
-        date_part = generated_at.strftime("%Y-%m-%d")
-        pdf_path = os.path.join(store.reports_dir, f"{date_part}-{rid}.pdf")
-        with open(pdf_path, "wb") as f:
-            f.write(pdf_bytes)
+                generated_at = now()
+                rid = uuid4()
+                context: dict[str, Any] = {
+                    "title": body.name,
+                    "range_start": body.range_start.isoformat(),
+                    "range_end": body.range_end.isoformat(),
+                    "generated_at": generated_at.isoformat(),
+                    "generated_by": principal.username,
+                    "stats": {
+                        "approvals_total": len(approvals_in_range),
+                        "approvals_by_state": by_state,
+                        "approvals_by_priority": by_priority,
+                        "scores_total": len(scores),
+                        "unique_hosts": unique_hosts,
+                    },
+                    "chart_svg_b64": chart_b64,
+                    "approvals": approvals_in_range,
+                }
 
-        await store.insert_report(
-            id=rid, name=body.name,
-            range_start_iso=body.range_start.isoformat(),
-            range_end_iso=body.range_end.isoformat(),
-            generated_at_iso=generated_at.isoformat(),
-            generated_by=principal.username,
-            pdf_path=pdf_path, size_bytes=len(pdf_bytes),
-            approvals_count=len(approvals_in_range),
-            scores_count=len(scores),
-        )
+                html = render_html(context)
+                pdf_bytes = render_pdf(html)
 
-        return ReportMetadata(
-            id=rid, name=body.name,
-            range_start=body.range_start, range_end=body.range_end,
-            generated_at=generated_at, generated_by=principal.username,
-            size_bytes=len(pdf_bytes),
-            approvals_count=len(approvals_in_range),
-            scores_count=len(scores),
-        )
+                date_part = generated_at.strftime("%Y-%m-%d")
+                pdf_path = os.path.join(store.reports_dir, f"{date_part}-{rid}.pdf")
+                with open(pdf_path, "wb") as f:
+                    f.write(pdf_bytes)
+
+                await store.insert_report(
+                    id=rid, name=body.name,
+                    range_start_iso=body.range_start.isoformat(),
+                    range_end_iso=body.range_end.isoformat(),
+                    generated_at_iso=generated_at.isoformat(),
+                    generated_by=principal.username,
+                    pdf_path=pdf_path, size_bytes=len(pdf_bytes),
+                    approvals_count=len(approvals_in_range),
+                    scores_count=len(scores),
+                )
+
+                result = ReportMetadata(
+                    id=rid, name=body.name,
+                    range_start=body.range_start, range_end=body.range_end,
+                    generated_at=generated_at, generated_by=principal.username,
+                    size_bytes=len(pdf_bytes),
+                    approvals_count=len(approvals_in_range),
+                    scores_count=len(scores),
+                )
+                messages_processed_total.labels(SERVICE_LABEL).inc()
+                return result
+            except HTTPException:
+                raise   # 4xx/5xx already counted by Instrumentator
+            except Exception as e:
+                errors_total.labels(service=SERVICE_LABEL, kind=type(e).__name__).inc()
+                raise
 
     @app.get("/reports", response_model=ReportListResponse)
     async def list_reports(

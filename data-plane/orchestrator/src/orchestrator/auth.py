@@ -92,10 +92,11 @@ def make_auth_middleware(
         request: web.Request,
         handler: Callable[[web.Request], Awaitable[web.Response]],
     ) -> web.Response:
-        # /healthz and CORS preflight (OPTIONS) are exempt — browsers send
-        # OPTIONS without Authorization, so requiring Bearer here would
-        # block every cross-origin call from the admin-console.
-        if request.path == "/healthz" or request.method == "OPTIONS":
+        # /healthz, /metrics and CORS preflight (OPTIONS) are exempt — browsers
+        # send OPTIONS without Authorization, so requiring Bearer here would
+        # block every cross-origin call from the admin-console. /metrics is
+        # scraped by Prometheus inside the bus network — no token (v1 spec §8).
+        if request.path in ("/healthz", "/metrics") or request.method == "OPTIONS":
             return await handler(request)
         # Extract Bearer token
         authz = request.headers.get("Authorization", "")

@@ -10,6 +10,12 @@ from pydantic import ValidationError
 from intellifim_schemas import CanonicalEvent, CorrelatedEvent
 
 from correlator.buffer import HostBuffer
+from correlator.metrics import (
+    SERVICE_LABEL,
+    errors_total,
+    messages_processed_total,
+    processing_seconds,
+)
 
 log = logging.getLogger(__name__)
 
@@ -59,15 +65,34 @@ class CorrelationEngine:
 
     async def run(self) -> None:
         async for raw_message in self._consumer:
-            event = self._extract_event(raw_message)
-            if event is None:
-                continue
-            self._buffer.add(event)
-            counterparts = self._find_counterparts(event)
-            if not counterparts:
-                continue
-            correlation = self._build_correlation(event, counterparts)
-            await self._safe_publish(correlation)
+            try:
+                await self.process_one(raw_message)
+            except Exception:  # noqa: BLE001 - defensive: never let a single bad event kill the loop
+                log.exception("error processing message; continuing")
+
+    async def process_one(self, raw_message: Any) -> None:
+        """Process a single Kafka record: extract → buffer → match → publish.
+
+        Wrapped in RED-method Prometheus metrics so latency + throughput +
+        per-exception-type error rates are observable. Exceptions are
+        re-raised so the outer run-loop can log them (and so tests can assert
+        on the raise) — the loop swallows them at its own boundary.
+        """
+        with processing_seconds.labels(SERVICE_LABEL).time():
+            try:
+                event = self._extract_event(raw_message)
+                if event is None:
+                    messages_processed_total.labels(SERVICE_LABEL).inc()
+                    return
+                self._buffer.add(event)
+                counterparts = self._find_counterparts(event)
+                if counterparts:
+                    correlation = self._build_correlation(event, counterparts)
+                    await self._safe_publish(correlation)
+                messages_processed_total.labels(SERVICE_LABEL).inc()
+            except Exception as e:
+                errors_total.labels(service=SERVICE_LABEL, kind=type(e).__name__).inc()
+                raise
 
     @staticmethod
     def _extract_event(message: Any) -> CanonicalEvent | None:

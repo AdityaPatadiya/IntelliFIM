@@ -11,7 +11,7 @@ v3 (HA Kafka, K8s, multi-agent) are explicit follow-ups.
 
 ## What's in the box
 
-24 services on Docker Compose:
+27 services on Docker Compose:
 
 - **Sources:** `wazuh-manager`, `wazuh-agent`, `zeek-sensor`
 - **Shipping:** `filebeat-wazuh`, `filebeat-zeek`
@@ -27,7 +27,8 @@ v3 (HA Kafka, K8s, multi-agent) are explicit follow-ups.
   `normalizer-zeek-conn`, `normalizer-zeek-dns`, `normalizer-zeek-http`,
   `normalizer-zeek-files`
 - **Dev tooling:** `kafka-ui`, `victim-server`, `victim-client`
-- **Simulation lab (on-demand, profile `sim`):** `simulator` (5 curated attack scenarios with built-in `threat.scores` verification; sub-project #7's stack count of 24 stays at 24 in normal operation because `profiles: [sim]` keeps it hidden from `up -d`. See [simulator/](simulator/))
+- **Simulation lab (on-demand, profile `sim`):** `simulator` (5 curated attack scenarios with built-in `threat.scores` verification; `profiles: [sim]` keeps it hidden from `up -d`. See [simulator/](simulator/))
+- **Observability:** `prometheus` (port 9090), `grafana` (port 3000), `alertmanager` (port 9093) — scrapes the 6 in-house Python services every 15s, auto-provisions 2 dashboards (Pipeline overview + Threat & response health), routes 1 example alert rule (`IntelliFIMServiceDown`) to Alertmanager's console UI. See [prometheus/](prometheus/), [grafana/](grafana/), [alertmanager/](alertmanager/).
 
 ## Prerequisites
 
@@ -306,6 +307,34 @@ Each scenario exits `0` on detection (`✓ DETECTED score=X reason=...`), `2` on
 ```bash
 rm -rf monitored/sensitive_* monitored/cmd_*.php monitored/doc_*
 ```
+
+## Observability
+
+Sub-project #9 (the final v1 sub-project) adds Prometheus metrics scraping, Grafana dashboards, and Alertmanager. All 6 in-house Python services (`auth-backend`, `response-orchestrator`, `reporting`, `correlation-engine`, `anomaly-detector`, `policy-engine`) expose `/metrics` endpoints; Prometheus scrapes them every 15s.
+
+```bash
+# From data-plane/:
+./scripts/check-observability.sh           # verify everything is healthy
+```
+
+URLs (all bound to `127.0.0.1`):
+- **Prometheus UI:** http://localhost:9090
+- **Grafana:** http://localhost:3000  (anonymous viewer; `admin/admin` for editing)
+- **Alertmanager:** http://localhost:9093
+
+Two pre-built Grafana dashboards (in the "IntelliFIM" folder):
+1. **Pipeline overview** — `up` indicator per service, throughput / errors / p95 latency time-series for all 6 services.
+2. **Threat & response health** — policy-engine publish rate vs reporting ingest rate, approval API call rate + 5xx + p95 latency, auth login rate, report generation success rate.
+
+One example alert rule (`IntelliFIMServiceDown`) fires when any of the 6 services is unreachable for >2min. View firing alerts in the Alertmanager web UI.
+
+**v1 limitations** (deferred to v2):
+- No outbound notifications (no Slack/email/PagerDuty) — operator watches Alertmanager UI manually.
+- No log aggregation (Loki) — use `docker compose logs` for now.
+- No distributed traces (Jaeger).
+- No Kafka exporter — `up` is the only Kafka health signal in v1.
+- Grafana admin password is `admin/admin` for dev. v2 hardens.
+- No Helm chart — Docker Compose only. v2 deferral.
 
 ## Tear down
 

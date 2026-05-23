@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+from prometheus_client import start_http_server
 
 from correlator.buffer import HostBuffer
 from correlator.config import CorrelatorConfig
@@ -18,6 +20,12 @@ log = logging.getLogger("correlator")
 
 async def _run() -> None:
     cfg = CorrelatorConfig.from_env()
+
+    # Start metrics HTTP server (bound to all interfaces inside container; published
+    # only via 127.0.0.1 in compose). Spun up before the consume loop so Prometheus
+    # can scrape immediately on container start.
+    metrics_port = int(os.environ.get("METRICS_PORT", "9100"))
+    start_http_server(metrics_port)
 
     # auto_offset_reset="latest": on a fresh restart, skip the historical
     # backlog. v1 is a walking skeleton / live demo. Production should

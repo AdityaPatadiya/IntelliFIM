@@ -15,6 +15,7 @@ dependencies = [
     "aiosqlite>=0.20,<0.22",
     "aiohttp>=3.9,<4",
     "python-jose[cryptography]>=3.3,<4",
+    "prometheus-client>=0.20,<0.22",
 ]
 
 [project.optional-dependencies]

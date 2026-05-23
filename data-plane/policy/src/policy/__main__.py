@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+from prometheus_client import start_http_server
 
 from policy.config import PolicyConfig
 from policy.engine import PolicyEngine
@@ -19,6 +21,12 @@ log = logging.getLogger("policy")
 
 async def _run() -> None:
     cfg = PolicyConfig.from_env()
+
+    # Start metrics HTTP server (bound to all interfaces inside container; published
+    # only via 127.0.0.1 in compose). Spun up before the consume loop so Prometheus
+    # can scrape immediately on container start.
+    metrics_port = int(os.environ.get("METRICS_PORT", "9102"))
+    start_http_server(metrics_port)
 
     # auto_offset_reset="latest": skip historical backlog on fresh restart.
     # v1 walking-skeleton / live demo. v2 should reconsider.

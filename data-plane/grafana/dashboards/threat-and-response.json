@@ -1,0 +1,116 @@
+{
+  "uid": "intellifim-threat-response",
+  "title": "IntelliFIM — Threat & response health",
+  "tags": ["intellifim"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Threat-score flow",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "policy-engine publish rate vs reporting ingest rate",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 1 },
+      "targets": [
+        { "expr": "rate(intellifim_messages_processed_total{service=\"policy-engine\"}[1m])", "refId": "A", "legendFormat": "policy publish" },
+        { "expr": "rate(intellifim_messages_processed_total{service=\"reporting\"}[1m])", "refId": "B", "legendFormat": "reporting ingest" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Approvals API",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Approval API call rate (by handler)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "targets": [
+        { "expr": "sum(rate(http_requests_total{job=\"intellifim-orchestrator\", handler=~\"/approvals.*\"}[1m])) by (handler)", "refId": "A", "legendFormat": "{{handler}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Approval API 5xx errors (by status)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "targets": [
+        { "expr": "sum(rate(http_requests_total{job=\"intellifim-orchestrator\", handler=~\"/approvals.*\", status=~\"5..\"}[1m])) by (status)", "refId": "A", "legendFormat": "{{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Approval API p95 latency",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 18 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"intellifim-orchestrator\", handler=~\"/approvals.*\"}[5m])) by (le))", "refId": "A", "legendFormat": "p95" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Auth + Reporting",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Auth login rate (by status)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 27 },
+      "targets": [
+        { "expr": "sum(rate(http_requests_total{job=\"intellifim-auth-backend\", handler=\"/auth/login\"}[1m])) by (status)", "refId": "A", "legendFormat": "{{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Report generation success rate",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 27 },
+      "targets": [
+        { "expr": "sum(rate(http_requests_total{job=\"intellifim-reporting\", handler=\"/reports/generate\", status=\"201\"}[5m]))", "refId": "A", "legendFormat": "201s/sec" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Reporting service errors",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 35 },
+      "targets": [
+        { "expr": "sum(rate(intellifim_errors_total{service=\"reporting\"}[5m])) by (kind)", "refId": "A", "legendFormat": "{{kind}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    }
+  ]
+}
