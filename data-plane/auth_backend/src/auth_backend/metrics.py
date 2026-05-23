@@ -14,7 +14,7 @@ messages_processed_total = Counter(
     "Number of input messages processed by the service",
     ["service"],
 )
-
+    
 errors_total = Counter(
     "intellifim_errors_total",
     "Number of errors encountered by the service",
