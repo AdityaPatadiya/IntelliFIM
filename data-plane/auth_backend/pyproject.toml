@@ -19,6 +19,8 @@ dependencies = [
     # passlib 1.8 ships an upstream fix.
     "bcrypt>=4.0,<4.1",
     "python-jose[cryptography]>=3.3,<4",
+    "prometheus-client>=0.20,<0.22",
+    "prometheus-fastapi-instrumentator>=7.0,<8",
 ]
 
 [project.optional-dependencies]

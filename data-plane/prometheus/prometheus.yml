@@ -1,0 +1,36 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: "intellifim-auth-backend"
+    static_configs:
+      - targets: ["auth-backend:8000"]
+
+  - job_name: "intellifim-orchestrator"
+    static_configs:
+      - targets: ["response-orchestrator:8200"]
+
+  - job_name: "intellifim-reporting"
+    static_configs:
+      - targets: ["reporting:8300"]
+
+  - job_name: "intellifim-correlator"
+    static_configs:
+      - targets: ["correlation-engine:9100"]
+
+  - job_name: "intellifim-anomaly"
+    static_configs:
+      - targets: ["anomaly-detector:9101"]
+
+  - job_name: "intellifim-policy"
+    static_configs:
+      - targets: ["policy-engine:9102"]

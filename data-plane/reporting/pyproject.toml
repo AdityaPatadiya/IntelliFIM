@@ -21,6 +21,8 @@ dependencies = [
     "jinja2>=3.1,<4",
     "matplotlib>=3.8,<4",
     "intellifim-schemas>=0.4,<1.0",
+    "prometheus-client>=0.20,<0.22",
+    "prometheus-fastapi-instrumentator>=7.0,<8",
 ]
 
 [project.optional-dependencies]

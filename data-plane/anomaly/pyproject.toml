@@ -13,6 +13,7 @@ dependencies = [
     "pydantic>=2.7,<3",
     "scikit-learn>=1.4,<2",
     "numpy>=1.26,<3",
+    "prometheus-client>=0.20,<0.22",
 ]
 
 [project.optional-dependencies]

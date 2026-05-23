@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import pickle
 from typing import Any
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+from prometheus_client import start_http_server
 
 from anomaly.config import AnomalyConfig
 from anomaly.engine import AnomalyEngine
@@ -28,6 +30,12 @@ def _load_model(path: str) -> tuple[Any, list[str], str]:
 async def _run() -> None:
     cfg = AnomalyConfig.from_env()
     model, feature_names, model_version = _load_model(cfg.model_path)
+
+    # Start metrics HTTP server (bound to all interfaces inside container; published
+    # only via 127.0.0.1 in compose). Spun up before the consume loop so Prometheus
+    # can scrape immediately on container start.
+    metrics_port = int(os.environ.get("METRICS_PORT", "9101"))
+    start_http_server(metrics_port)
 
     # auto_offset_reset="latest": on a fresh restart, skip the historical
     # backlog. v1 is a walking skeleton / live demo. Production should

@@ -16,6 +16,12 @@ from pydantic import ValidationError
 
 from intellifim_schemas import ThreatScoreUpdate
 
+from orchestrator.metrics import (
+    SERVICE_LABEL,
+    errors_total,
+    messages_processed_total,
+    processing_seconds,
+)
 from orchestrator.store import ApprovalStore
 from orchestrator.tier import Tier, classify
 
@@ -75,23 +81,30 @@ class OrchestratorEngine:
             return None
 
     async def _process(self, update: ThreatScoreUpdate) -> None:
-        tier = classify(update.score, low=self._tier_low, high=self._tier_high)
-        if tier is Tier.IGNORE:
-            log.info(
-                "ignoring host=%s score=%.1f (below tier_low=%.1f)",
-                update.host_id, update.score, self._tier_low,
-            )
-            return
-        inserted = await self._store.insert_if_no_pending(
-            id=update.update_id,
-            host_id=update.host_id,
-            priority=_PRIORITY_BY_TIER[tier],
-            score=update.score,
-            last_reason=update.last_reason,
-            now=self._now(),
-        )
-        if not inserted:
-            log.info(
-                "deduped host=%s update_id=%s (host already PENDING or duplicate id)",
-                update.host_id, update.update_id,
-            )
+        with processing_seconds.labels(SERVICE_LABEL).time():
+            try:
+                tier = classify(update.score, low=self._tier_low, high=self._tier_high)
+                if tier is Tier.IGNORE:
+                    log.info(
+                        "ignoring host=%s score=%.1f (below tier_low=%.1f)",
+                        update.host_id, update.score, self._tier_low,
+                    )
+                    messages_processed_total.labels(SERVICE_LABEL).inc()
+                    return
+                inserted = await self._store.insert_if_no_pending(
+                    id=update.update_id,
+                    host_id=update.host_id,
+                    priority=_PRIORITY_BY_TIER[tier],
+                    score=update.score,
+                    last_reason=update.last_reason,
+                    now=self._now(),
+                )
+                if not inserted:
+                    log.info(
+                        "deduped host=%s update_id=%s (host already PENDING or duplicate id)",
+                        update.host_id, update.update_id,
+                    )
+                messages_processed_total.labels(SERVICE_LABEL).inc()
+            except Exception as e:
+                errors_total.labels(service=SERVICE_LABEL, kind=type(e).__name__).inc()
+                raise

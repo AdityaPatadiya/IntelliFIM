@@ -9,6 +9,12 @@ from pydantic import ValidationError
 
 from intellifim_schemas import ThreatScoreUpdate
 
+from reporting.metrics import (
+    SERVICE_LABEL,
+    errors_total,
+    messages_processed_total,
+    processing_seconds,
+)
 from reporting.store import ReportingStore
 
 
@@ -73,15 +79,21 @@ class KafkaScoreConsumer:
         - last_reason -> reason
         - computed_at -> ts
         """
-        upd = _extract_score(message)
-        if upd is None:
-            return
-        await self._store.insert_score(
-            host_id=upd.host_id,
-            score=upd.score,
-            reason=upd.last_reason,
-            ts=upd.computed_at,
-        )
+        with processing_seconds.labels(SERVICE_LABEL).time():
+            upd = _extract_score(message)
+            if upd is None:
+                return
+            try:
+                await self._store.insert_score(
+                    host_id=upd.host_id,
+                    score=upd.score,
+                    reason=upd.last_reason,
+                    ts=upd.computed_at,
+                )
+                messages_processed_total.labels(SERVICE_LABEL).inc()
+            except Exception as e:
+                errors_total.labels(service=SERVICE_LABEL, kind=type(e).__name__).inc()
+                raise
 
     async def run(self) -> None:
         """Long-running consume loop. Caller is responsible for cancelation."""

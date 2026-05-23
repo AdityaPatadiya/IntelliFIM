@@ -1,0 +1,12 @@
+groups:
+  - name: intellifim-availability
+    interval: 30s
+    rules:
+      - alert: IntelliFIMServiceDown
+        expr: up{job=~"intellifim-.+"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "IntelliFIM service {{ $labels.job }} is down"
+          description: "{{ $labels.job }} ({{ $labels.instance }}) has been unreachable for >2 minutes."

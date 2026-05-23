@@ -1,0 +1,179 @@
+{
+  "uid": "intellifim-pipeline",
+  "title": "IntelliFIM — Pipeline overview",
+  "tags": ["intellifim"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Service health (up == 1)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "correlation-engine",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "targets": [{ "expr": "up{job=\"intellifim-correlator\"}", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "value": null, "color": "red" },
+            { "value": 1, "color": "green" }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "anomaly-detector",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "targets": [{ "expr": "up{job=\"intellifim-anomaly\"}", "refId": "A" }],
+      "fieldConfig": { "defaults": {
+        "mappings": [{ "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }],
+        "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "red" }, { "value": 1, "color": "green" }] }
+      }}
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "policy-engine",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "targets": [{ "expr": "up{job=\"intellifim-policy\"}", "refId": "A" }],
+      "fieldConfig": { "defaults": {
+        "mappings": [{ "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }],
+        "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "red" }, { "value": 1, "color": "green" }] }
+      }}
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "response-orchestrator",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "targets": [{ "expr": "up{job=\"intellifim-orchestrator\"}", "refId": "A" }],
+      "fieldConfig": { "defaults": {
+        "mappings": [{ "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }],
+        "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "red" }, { "value": 1, "color": "green" }] }
+      }}
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "auth-backend",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "targets": [{ "expr": "up{job=\"intellifim-auth-backend\"}", "refId": "A" }],
+      "fieldConfig": { "defaults": {
+        "mappings": [{ "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }],
+        "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "red" }, { "value": 1, "color": "green" }] }
+      }}
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "reporting",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "targets": [{ "expr": "up{job=\"intellifim-reporting\"}", "refId": "A" }],
+      "fieldConfig": { "defaults": {
+        "mappings": [{ "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }],
+        "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [{ "value": null, "color": "red" }, { "value": 1, "color": "green" }] }
+      }}
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Throughput (msg/sec, 1m rate)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Messages processed per service",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 6 },
+      "targets": [
+        { "expr": "rate(intellifim_messages_processed_total{service=\"correlation-engine\"}[1m])", "refId": "A", "legendFormat": "correlator" },
+        { "expr": "rate(intellifim_messages_processed_total{service=\"anomaly-detector\"}[1m])",   "refId": "B", "legendFormat": "anomaly" },
+        { "expr": "rate(intellifim_messages_processed_total{service=\"policy-engine\"}[1m])",     "refId": "C", "legendFormat": "policy" },
+        { "expr": "rate(intellifim_messages_processed_total{service=\"response-orchestrator\"}[1m])", "refId": "D", "legendFormat": "orchestrator" },
+        { "expr": "rate(intellifim_messages_processed_total{service=\"auth-backend\"}[1m])",     "refId": "E", "legendFormat": "auth-backend" },
+        { "expr": "rate(intellifim_messages_processed_total{service=\"reporting\"}[1m])",        "refId": "F", "legendFormat": "reporting" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 12,
+      "type": "row",
+      "title": "Errors (errors/sec, 5m rate)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Errors per service",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 15 },
+      "targets": [
+        { "expr": "sum(rate(intellifim_errors_total{service=\"correlation-engine\"}[5m])) by (kind)", "refId": "A", "legendFormat": "correlator/{{kind}}" },
+        { "expr": "sum(rate(intellifim_errors_total{service=\"anomaly-detector\"}[5m])) by (kind)", "refId": "B", "legendFormat": "anomaly/{{kind}}" },
+        { "expr": "sum(rate(intellifim_errors_total{service=\"policy-engine\"}[5m])) by (kind)", "refId": "C", "legendFormat": "policy/{{kind}}" },
+        { "expr": "sum(rate(intellifim_errors_total{service=\"response-orchestrator\"}[5m])) by (kind)", "refId": "D", "legendFormat": "orchestrator/{{kind}}" },
+        { "expr": "sum(rate(intellifim_errors_total{service=\"auth-backend\"}[5m])) by (kind)", "refId": "E", "legendFormat": "auth-backend/{{kind}}" },
+        { "expr": "sum(rate(intellifim_errors_total{service=\"reporting\"}[5m])) by (kind)", "refId": "F", "legendFormat": "reporting/{{kind}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "p95 latency",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "p95 processing latency per service",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(intellifim_processing_seconds_bucket{service=\"correlation-engine\"}[5m])) by (le))", "refId": "A", "legendFormat": "correlator" },
+        { "expr": "histogram_quantile(0.95, sum(rate(intellifim_processing_seconds_bucket{service=\"anomaly-detector\"}[5m])) by (le))",   "refId": "B", "legendFormat": "anomaly" },
+        { "expr": "histogram_quantile(0.95, sum(rate(intellifim_processing_seconds_bucket{service=\"policy-engine\"}[5m])) by (le))",     "refId": "C", "legendFormat": "policy" },
+        { "expr": "histogram_quantile(0.95, sum(rate(intellifim_processing_seconds_bucket{service=\"response-orchestrator\"}[5m])) by (le))", "refId": "D", "legendFormat": "orchestrator" },
+        { "expr": "histogram_quantile(0.95, sum(rate(intellifim_processing_seconds_bucket{service=\"auth-backend\"}[5m])) by (le))",     "refId": "E", "legendFormat": "auth-backend" },
+        { "expr": "histogram_quantile(0.95, sum(rate(intellifim_processing_seconds_bucket{service=\"reporting\"}[5m])) by (le))",        "refId": "F", "legendFormat": "reporting" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    }
+  ]
+}
