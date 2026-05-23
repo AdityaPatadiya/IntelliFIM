@@ -32,8 +32,8 @@ const navItems: NavItem[] = [
   { title: 'File Monitoring', href: '/file-integrity', icon: FileSearch, roles: ['admin', 'analyst', 'viewer'] },
   { title: 'Network Monitoring', href: '/network-monitoring', icon: Network, roles: ['admin', 'analyst', 'viewer'] },
   // { title: 'AI Anomaly Detection', href: '/ai-anomaly', icon: Brain, roles: ['admin', 'analyst', 'viewer'] },
-  // { title: 'Incident Management', href: '/incidents', icon: AlertTriangle, roles: ['admin', 'analyst'] },
-  
+  { title: 'Incident Management', href: '/incidents', icon: AlertTriangle, roles: ['admin', 'analyst'] },
+
   { title: 'Employee Management', href: '/employees', icon: Users, roles: ['admin'] },
   { title: 'System Configuration', href: '/config', icon: Settings, roles: ['admin'] },
   { title: 'Reports & Analytics', href: '/reports', icon: FileText, roles: ['admin', 'analyst', 'viewer'] },
