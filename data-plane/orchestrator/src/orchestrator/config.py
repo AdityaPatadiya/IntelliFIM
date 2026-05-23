@@ -11,7 +11,7 @@ INPUT_TOPIC = "threat.scores"
 class OrchestratorConfig:
     bootstrap_servers: str
     consumer_group: str
-    db_path: str
+    database_url: str
     api_host: str
     api_port: int
     wazuh_manager_url: str
@@ -39,6 +39,9 @@ class OrchestratorConfig:
         jwt_secret = os.environ.get("JWT_SECRET")
         if not jwt_secret:
             raise ValueError("JWT_SECRET env var is required (no default)")
+        database_url = os.environ.get("DATABASE_URL")
+        if not database_url:
+            raise ValueError("DATABASE_URL env var is required (no default)")
         cors_raw = os.environ.get(
             "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
         )
@@ -46,7 +49,7 @@ class OrchestratorConfig:
         return cls(
             bootstrap_servers=os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092"),
             consumer_group=os.environ.get("CONSUMER_GROUP", "response-orchestrator"),
-            db_path=os.environ.get("DB_PATH", "/data/approvals.db"),
+            database_url=database_url,
             api_host=os.environ.get("API_HOST", "0.0.0.0"),
             api_port=api_port,
             wazuh_manager_url=os.environ.get("WAZUH_MANAGER_URL", "https://wazuh-manager:55000"),

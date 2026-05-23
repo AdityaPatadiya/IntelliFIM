@@ -11,7 +11,7 @@ v3 (HA Kafka, K8s, multi-agent) are explicit follow-ups.
 
 ## What's in the box
 
-27 services on Docker Compose:
+28 services on Docker Compose:
 
 - **Sources:** `wazuh-manager`, `wazuh-agent`, `zeek-sensor`
 - **Shipping:** `filebeat-wazuh`, `filebeat-zeek`
@@ -29,6 +29,7 @@ v3 (HA Kafka, K8s, multi-agent) are explicit follow-ups.
 - **Dev tooling:** `kafka-ui`, `victim-server`, `victim-client`
 - **Simulation lab (on-demand, profile `sim`):** `simulator` (5 curated attack scenarios with built-in `threat.scores` verification; `profiles: [sim]` keeps it hidden from `up -d`. See [simulator/](simulator/))
 - **Observability:** `prometheus` (port 9090), `grafana` (port 3000), `alertmanager` (port 9093) — scrapes the 6 in-house Python services every 15s, auto-provisions 2 dashboards (Pipeline overview + Threat & response health), routes 1 example alert rule (`IntelliFIMServiceDown`) to Alertmanager's console UI. See [prometheus/](prometheus/), [grafana/](grafana/), [alertmanager/](alertmanager/).
+- **Persistence (v2):** `postgres` (port 5433 on host → 5432 in container, `bus` network) hosts 3 separate databases (`auth_backend`, `orchestrator`, `reporting`) for the 3 services that previously used SQLite. PDFs continue to live on the `reporting_data` Docker volume (only metadata is in Postgres). See [postgres/](postgres/).
 
 ## Prerequisites
 
@@ -335,6 +336,44 @@ One example alert rule (`IntelliFIMServiceDown`) fires when any of the 6 service
 - No Kafka exporter — `up` is the only Kafka health signal in v1.
 - Grafana admin password is `admin/admin` for dev. v2 hardens.
 - No Helm chart — Docker Compose only. v2 deferral.
+
+## Postgres (v2)
+
+Sub-project v2-1 migrated 3 SQLite-backed services (auth-backend, response-orchestrator, reporting) to a single Postgres 16 instance hosting 3 isolated databases:
+
+| Database | Owner user | Used by |
+|---|---|---|
+| `auth_backend` | `auth` | auth-backend (`/auth/*` endpoints — users table) |
+| `orchestrator` | `orchestrator` | response-orchestrator (approvals state machine) |
+| `reporting` | `reporting` | reporting (threat_scores append-log + reports metadata) |
+
+The root `postgres` superuser is used only by the one-shot init script at first boot.
+
+```bash
+# From data-plane/:
+./scripts/check-postgres.sh                          # verify all 3 DBs + 3 users + tables exist
+docker exec postgres psql -U postgres -l             # list databases
+docker exec postgres psql -U postgres -d auth_backend -c "\dt"   # show tables
+```
+
+PDFs continue to live on the `reporting_data` Docker volume (only metadata is in Postgres). Host port is **5433** (not 5432) to avoid clashing with a Postgres install on the developer machine — services inside Compose use `postgres:5432` as usual.
+
+**v2-1 limitations** (deferred to later v2/v3 work):
+- No alembic — schemas managed by `CREATE TABLE IF NOT EXISTS` at startup.
+- No TLS to Postgres — plain connections within the `bus` network. Pairs with the TLS-everywhere v2 theme.
+- No HA — single Postgres replica. v3 adds streaming replication.
+- No `postgres-exporter` for Prometheus — pairs with the observability v2 theme.
+- No backup tooling — `pg_dump` cron + restore script is a v2/v3 follow-up.
+- Db passwords in env vars, not Vault — Vault is its own v2 theme.
+
+**For operators migrating from v1 (NOT a fresh checkout):** the legacy SQLite files in the OLD `auth_backend_data` and `orchestrator_data` volumes are unreferenced after the v2 swap. Remove them:
+```bash
+docker volume rm $(docker volume ls -q | grep -E "_(auth_backend_data|orchestrator_data)$")
+```
+The `reporting_data` volume STAYS (PDFs live there); just remove the legacy `reporting.db` file inside it:
+```bash
+docker exec reporting rm -f /data/reporting.db
+```
 
 ## Tear down
 

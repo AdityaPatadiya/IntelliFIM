@@ -8,14 +8,14 @@ from auth_backend.store import DuplicateUserError, UserRow, UsersStore
 _T0 = datetime(2026, 5, 20, 12, 0, 0, tzinfo=timezone.utc)
 
 
-async def _make_store(tmp_db_path):
-    store = UsersStore(tmp_db_path)
-    await store.init_schema()
-    return store
+async def _make_store(pg_pool):
+    s = UsersStore(pool=pg_pool)
+    await s.init_schema()
+    return s
 
 
-async def test_create_user_persists_row(tmp_db_path):
-    store = await _make_store(tmp_db_path)
+async def test_create_user_persists_row(pg_pool):
+    store = await _make_store(pg_pool)
     try:
         row = await store.create_user(
             username="alice", email="alice@example.com",
@@ -33,8 +33,8 @@ async def test_create_user_persists_row(tmp_db_path):
         await store.aclose()
 
 
-async def test_create_user_duplicate_username_raises(tmp_db_path):
-    store = await _make_store(tmp_db_path)
+async def test_create_user_duplicate_username_raises(pg_pool):
+    store = await _make_store(pg_pool)
     try:
         await store.create_user(
             username="alice", email="a@b", password="x", role="admin", now=_T0,
@@ -47,8 +47,8 @@ async def test_create_user_duplicate_username_raises(tmp_db_path):
         await store.aclose()
 
 
-async def test_create_user_duplicate_email_raises(tmp_db_path):
-    store = await _make_store(tmp_db_path)
+async def test_create_user_duplicate_email_raises(pg_pool):
+    store = await _make_store(pg_pool)
     try:
         await store.create_user(
             username="alice", email="a@b", password="x", role="admin", now=_T0,
@@ -61,16 +61,16 @@ async def test_create_user_duplicate_email_raises(tmp_db_path):
         await store.aclose()
 
 
-async def test_get_by_email_missing_returns_none(tmp_db_path):
-    store = await _make_store(tmp_db_path)
+async def test_get_by_email_missing_returns_none(pg_pool):
+    store = await _make_store(pg_pool)
     try:
         assert await store.get_by_email("nope@example.com") is None
     finally:
         await store.aclose()
 
 
-async def test_password_hash_is_bcrypt_not_plaintext(tmp_db_path):
-    store = await _make_store(tmp_db_path)
+async def test_password_hash_is_bcrypt_not_plaintext(pg_pool):
+    store = await _make_store(pg_pool)
     try:
         await store.create_user(
             username="alice", email="a@b", password="my-plaintext",

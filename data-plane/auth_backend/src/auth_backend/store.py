@@ -1,25 +1,39 @@
-"""SQLite-backed user store with bcrypt password hashing."""
+"""Postgres-backed users store (v2).
+
+asyncpg connection pool + native UUID / TIMESTAMPTZ types. The class shape
+and method signatures match the v1 aiosqlite version exactly — callers
+don't notice the swap.
+
+Pattern: asyncpg.create_pool(min_size=1, max_size=8). Postgres handles
+concurrent writes natively; no application-level asyncio.Lock needed.
+`init_schema()` is idempotent (CREATE TABLE IF NOT EXISTS). `aclose()`
+closes the pool (only if the store owns it).
+"""
 from __future__ import annotations
 
-import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID, uuid4
 
-import aiosqlite
+import asyncpg
 from passlib.hash import bcrypt
 
 
-_CREATE_TABLE = """
+logger = logging.getLogger(__name__)
+
+
+_CREATE_USERS = """
 CREATE TABLE IF NOT EXISTS users (
-    id            TEXT PRIMARY KEY,
+    id            UUID PRIMARY KEY,
     username      TEXT NOT NULL UNIQUE,
     email         TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     role          TEXT NOT NULL,
-    created_at    TEXT NOT NULL
+    created_at    TIMESTAMPTZ NOT NULL
 );
 """
+_IDX_USERS_EMAIL = "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);"
 
 
 class DuplicateUserError(Exception):
@@ -33,34 +47,43 @@ class UserRow:
     email: str
     password_hash: str
     role: str
-    created_at: str
+    created_at: str  # ISO-8601 string (preserved from v1 contract)
 
 
 def _row(record) -> UserRow:
+    created_at = record["created_at"]
     return UserRow(
-        id=UUID(record["id"]),
+        id=record["id"],
         username=record["username"],
         email=record["email"],
         password_hash=record["password_hash"],
         role=record["role"],
-        created_at=record["created_at"],
+        created_at=created_at.isoformat() if isinstance(created_at, datetime) else created_at,
     )
 
 
 class UsersStore:
-    def __init__(self, db_path: str) -> None:
-        self._db_path = db_path
-        self._conn: aiosqlite.Connection | None = None
-        self._lock = asyncio.Lock()
+    def __init__(
+        self,
+        database_url: str | None = None,
+        *,
+        pool: asyncpg.Pool | None = None,
+    ) -> None:
+        # Either `database_url` (production) or `pool` (tests using the testcontainers fixture).
+        self._database_url = database_url
+        self._pool: asyncpg.Pool | None = pool
+        self._pool_owned = pool is None  # only close pool if we created it
 
     async def init_schema(self) -> None:
-        if self._conn is not None:
-            return
-        self._conn = await aiosqlite.connect(self._db_path)
-        self._conn.row_factory = aiosqlite.Row
-        async with self._lock:
-            await self._conn.execute(_CREATE_TABLE)
-            await self._conn.commit()
+        if self._pool is None:
+            if self._database_url is None:
+                raise RuntimeError("database_url required when pool not provided")
+            self._pool = await asyncpg.create_pool(
+                self._database_url, min_size=1, max_size=8
+            )
+        async with self._pool.acquire() as conn:
+            await conn.execute(_CREATE_USERS)
+            await conn.execute(_IDX_USERS_EMAIL)
 
     async def create_user(
         self,
@@ -71,60 +94,63 @@ class UsersStore:
         role: str,
         now: datetime,
     ) -> UserRow:
-        if self._conn is None:
+        if self._pool is None:
             raise RuntimeError("call init_schema() first")
         password_hash = bcrypt.hash(password)
         new_id = uuid4()
-        async with self._lock:
-            # Pre-check for clearer error than IntegrityError
-            cur = await self._conn.execute(
-                "SELECT 1 FROM users WHERE username = ? LIMIT 1", (username,)
+        async with self._pool.acquire() as conn:
+            # Pre-check for clearer error than UniqueViolationError
+            existing_uname = await conn.fetchrow(
+                "SELECT 1 FROM users WHERE username = $1 LIMIT 1", username
             )
-            if await cur.fetchone() is not None:
+            if existing_uname is not None:
                 raise DuplicateUserError(f"username '{username}' already exists")
-            cur = await self._conn.execute(
-                "SELECT 1 FROM users WHERE email = ? LIMIT 1", (email,)
+            existing_email = await conn.fetchrow(
+                "SELECT 1 FROM users WHERE email = $1 LIMIT 1", email
             )
-            if await cur.fetchone() is not None:
+            if existing_email is not None:
                 raise DuplicateUserError(f"email '{email}' already exists")
-            await self._conn.execute(
+            row = await conn.fetchrow(
                 """
                 INSERT INTO users (id, username, email, password_hash, role, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING *
                 """,
-                (str(new_id), username, email, password_hash, role, now.isoformat()),
+                new_id,
+                username,
+                email,
+                password_hash,
+                role,
+                now,
             )
-            await self._conn.commit()
-        return UserRow(
-            id=new_id, username=username, email=email,
-            password_hash=password_hash, role=role, created_at=now.isoformat(),
-        )
+        return _row(row)
 
     async def get_by_email(self, email: str) -> UserRow | None:
-        if self._conn is None:
+        if self._pool is None:
             raise RuntimeError("call init_schema() first")
-        cur = await self._conn.execute(
-            "SELECT * FROM users WHERE email = ?", (email,)
-        )
-        record = await cur.fetchone()
+        async with self._pool.acquire() as conn:
+            record = await conn.fetchrow(
+                "SELECT * FROM users WHERE email = $1", email
+            )
         return _row(record) if record else None
 
     async def get_by_id(self, user_id: UUID) -> UserRow | None:
-        if self._conn is None:
+        if self._pool is None:
             raise RuntimeError("call init_schema() first")
-        cur = await self._conn.execute(
-            "SELECT * FROM users WHERE id = ?", (str(user_id),)
-        )
-        record = await cur.fetchone()
+        async with self._pool.acquire() as conn:
+            record = await conn.fetchrow(
+                "SELECT * FROM users WHERE id = $1", user_id
+            )
         return _row(record) if record else None
 
     async def admin_exists(self) -> bool:
-        if self._conn is None:
+        if self._pool is None:
             raise RuntimeError("call init_schema() first")
-        cur = await self._conn.execute(
-            "SELECT 1 FROM users WHERE role = 'admin' LIMIT 1"
-        )
-        return await cur.fetchone() is not None
+        async with self._pool.acquire() as conn:
+            record = await conn.fetchrow(
+                "SELECT 1 FROM users WHERE role = 'admin' LIMIT 1"
+            )
+        return record is not None
 
     @staticmethod
     def verify_password(plaintext: str, password_hash: str) -> bool:
@@ -134,6 +160,6 @@ class UsersStore:
             return False
 
     async def aclose(self) -> None:
-        if self._conn is not None:
-            await self._conn.close()
-            self._conn = None
+        if self._pool is not None and self._pool_owned:
+            await self._pool.close()
+            self._pool = None

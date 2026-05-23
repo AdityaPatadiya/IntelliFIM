@@ -13,16 +13,31 @@ fi
 
 if grep -q '^JWT_SECRET=.\+' "$ENV_FILE"; then
     echo "JWT_SECRET already set in ${ENV_FILE}; skipping."
-    exit 0
-fi
-
-SECRET=$(openssl rand -base64 48 | tr -d '\n')
-
-# If a blank JWT_SECRET= line exists, replace it; else append.
-if grep -q '^JWT_SECRET=$' "$ENV_FILE"; then
-    sed -i "s|^JWT_SECRET=$|JWT_SECRET=${SECRET}|" "$ENV_FILE"
 else
-    echo "JWT_SECRET=${SECRET}" >> "$ENV_FILE"
+    SECRET=$(openssl rand -base64 48 | tr -d '\n')
+
+    # If a blank JWT_SECRET= line exists, replace it; else append.
+    if grep -q '^JWT_SECRET=$' "$ENV_FILE"; then
+        sed -i "s|^JWT_SECRET=$|JWT_SECRET=${SECRET}|" "$ENV_FILE"
+    else
+        echo "JWT_SECRET=${SECRET}" >> "$ENV_FILE"
+    fi
+
+    echo "JWT_SECRET written to ${ENV_FILE}"
 fi
 
-echo "JWT_SECRET written to ${ENV_FILE}"
+# v2: 4 Postgres passwords (root + 3 service users)
+for var in POSTGRES_ROOT_PASSWORD POSTGRES_AUTH_PASSWORD POSTGRES_ORCH_PASSWORD POSTGRES_REPORTING_PASSWORD; do
+    if grep -q "^${var}=.\+" "$ENV_FILE"; then
+        echo "${var} already set in ${ENV_FILE}; skipping."
+        continue
+    fi
+    # hex (not base64) — Postgres passwords go into DATABASE_URL; base64 chars `/+=` break URL parsing
+    PG_SECRET=$(openssl rand -hex 24)
+    if grep -q "^${var}=$" "$ENV_FILE"; then
+        sed -i "s|^${var}=$|${var}=${PG_SECRET}|" "$ENV_FILE"
+    else
+        echo "${var}=${PG_SECRET}" >> "$ENV_FILE"
+    fi
+    echo "${var} written to ${ENV_FILE}"
+done

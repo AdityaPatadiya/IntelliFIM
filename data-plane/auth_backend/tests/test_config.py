@@ -4,7 +4,6 @@ from auth_backend.config import AuthBackendConfig
 
 
 def test_from_env_with_defaults(monkeypatch):
-    monkeypatch.delenv("DB_PATH", raising=False)
     monkeypatch.delenv("API_HOST", raising=False)
     monkeypatch.delenv("API_PORT", raising=False)
     monkeypatch.delenv("JWT_TTL_SECONDS", raising=False)
@@ -12,10 +11,13 @@ def test_from_env_with_defaults(monkeypatch):
     monkeypatch.delenv("ADMIN_USERNAME", raising=False)
     # Required vars
     monkeypatch.setenv("JWT_SECRET", "test-secret")
+    monkeypatch.setenv(
+        "DATABASE_URL", "postgresql://auth:pw@postgres:5432/intellifim_auth"
+    )
     monkeypatch.setenv("ADMIN_EMAIL", "admin@example.com")
     monkeypatch.setenv("ADMIN_PASSWORD", "secret")
     cfg = AuthBackendConfig.from_env()
-    assert cfg.db_path == "/data/users.db"
+    assert cfg.database_url == "postgresql://auth:pw@postgres:5432/intellifim_auth"
     assert cfg.api_host == "0.0.0.0"
     assert cfg.api_port == 8000
     assert cfg.jwt_secret == "test-secret"
@@ -27,7 +29,9 @@ def test_from_env_with_defaults(monkeypatch):
 
 
 def test_from_env_overrides(monkeypatch):
-    monkeypatch.setenv("DB_PATH", "/tmp/staging.db")
+    monkeypatch.setenv(
+        "DATABASE_URL", "postgresql://staging:pw@db.staging:5432/auth"
+    )
     monkeypatch.setenv("API_HOST", "127.0.0.1")
     monkeypatch.setenv("API_PORT", "9999")
     monkeypatch.setenv("JWT_SECRET", "prod-secret")
@@ -37,7 +41,7 @@ def test_from_env_overrides(monkeypatch):
     monkeypatch.setenv("ADMIN_EMAIL", "root@example.com")
     monkeypatch.setenv("ADMIN_PASSWORD", "rootpw")
     cfg = AuthBackendConfig.from_env()
-    assert cfg.db_path == "/tmp/staging.db"
+    assert cfg.database_url == "postgresql://staging:pw@db.staging:5432/auth"
     assert cfg.api_host == "127.0.0.1"
     assert cfg.api_port == 9999
     assert cfg.jwt_secret == "prod-secret"
@@ -50,14 +54,25 @@ def test_from_env_overrides(monkeypatch):
 
 def test_from_env_missing_jwt_secret_raises(monkeypatch):
     monkeypatch.delenv("JWT_SECRET", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@h:5432/d")
     monkeypatch.setenv("ADMIN_EMAIL", "x@y")
     monkeypatch.setenv("ADMIN_PASSWORD", "z")
     with pytest.raises(ValueError, match="JWT_SECRET"):
         AuthBackendConfig.from_env()
 
 
+def test_from_env_missing_database_url_raises(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "x")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("ADMIN_EMAIL", "x@y")
+    monkeypatch.setenv("ADMIN_PASSWORD", "z")
+    with pytest.raises(ValueError, match="DATABASE_URL"):
+        AuthBackendConfig.from_env()
+
+
 def test_from_env_missing_admin_fields_raises(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "x")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@h:5432/d")
     monkeypatch.delenv("ADMIN_EMAIL", raising=False)
     monkeypatch.setenv("ADMIN_PASSWORD", "z")
     with pytest.raises(ValueError, match="ADMIN_EMAIL"):

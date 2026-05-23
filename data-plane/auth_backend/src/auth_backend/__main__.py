@@ -17,7 +17,7 @@ log = logging.getLogger("auth_backend")
 
 
 async def _bootstrap(cfg: AuthBackendConfig) -> tuple[UsersStore, "uvicorn.Server"]:
-    store = UsersStore(cfg.db_path)
+    store = UsersStore(database_url=cfg.database_url)
     await store.init_schema()
     await seed_admin_if_missing(
         store=store, username=cfg.admin_username,
@@ -40,8 +40,8 @@ async def _bootstrap(cfg: AuthBackendConfig) -> tuple[UsersStore, "uvicorn.Serve
 async def _run() -> None:
     cfg = AuthBackendConfig.from_env()
     log.info(
-        "starting auth-backend db=%s api=%s:%d jwt_ttl=%ds cors=%s",
-        cfg.db_path, cfg.api_host, cfg.api_port,
+        "starting auth-backend database_url=%s api=%s:%d jwt_ttl=%ds cors=%s",
+        cfg.database_url, cfg.api_host, cfg.api_port,
         cfg.jwt_ttl_seconds, cfg.cors_origins,
     )
     store, server = await _bootstrap(cfg)

@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _run(cfg: ReportingConfig) -> None:
-    store = ReportingStore(db_path=cfg.db_path, reports_dir=cfg.reports_dir)
+    store = ReportingStore(database_url=cfg.database_url, reports_dir=cfg.reports_dir)
     await store.init_schema()
     try:
         orchestrator = OrchestratorClient(base_url=cfg.orchestrator_url)

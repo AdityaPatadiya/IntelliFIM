@@ -7,7 +7,7 @@ from uuid import UUID
 import httpx
 import pytest
 import respx
-from fastapi.testclient import TestClient
+from httpx import ASGITransport
 from jose import jwt
 from prometheus_client import REGISTRY
 
@@ -39,10 +39,14 @@ def _make_token(*, username: str, role: str) -> str:
     return jwt.encode(payload, _SECRET, algorithm="HS256")
 
 
+def _async_client(app) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
 @pytest.mark.asyncio
-async def test_metrics_endpoint_returns_prometheus_format(tmp_path):
+async def test_metrics_endpoint_returns_prometheus_format(pg_url, tmp_path):
     store = ReportingStore(
-        db_path=str(tmp_path / "reporting.db"),
+        database_url=pg_url,
         reports_dir=str(tmp_path / "reports"),
     )
     await store.init_schema()
@@ -54,8 +58,8 @@ async def test_metrics_endpoint_returns_prometheus_format(tmp_path):
             cors_origins=("http://localhost:5173",),
             now=lambda: _T0,
         )
-        with TestClient(app) as c:
-            r = c.get("/metrics")
+        async with _async_client(app) as c:
+            r = await c.get("/metrics")
             assert r.status_code == 200
             assert "text/plain" in r.headers["content-type"]
             assert "intellifim_messages_processed_total" in r.text
@@ -66,9 +70,9 @@ async def test_metrics_endpoint_returns_prometheus_format(tmp_path):
 
 @pytest.mark.asyncio
 @respx.mock(assert_all_called=True)
-async def test_generate_increments_messages_processed_counter(respx_mock, tmp_path):
+async def test_generate_increments_messages_processed_counter(respx_mock, pg_url, tmp_path):
     store = ReportingStore(
-        db_path=str(tmp_path / "reporting.db"),
+        database_url=pg_url,
         reports_dir=str(tmp_path / "reports"),
     )
     await store.init_schema()
@@ -85,8 +89,8 @@ async def test_generate_increments_messages_processed_counter(respx_mock, tmp_pa
         )
         before = _counter_value()
         token = _make_token(username="alice", role="admin")
-        with TestClient(app) as c:
-            r = c.post(
+        async with _async_client(app) as c:
+            r = await c.post(
                 "/reports/generate",
                 headers={"Authorization": f"Bearer {token}"},
                 json={
