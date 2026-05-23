@@ -27,6 +27,7 @@ v3 (HA Kafka, K8s, multi-agent) are explicit follow-ups.
   `normalizer-zeek-conn`, `normalizer-zeek-dns`, `normalizer-zeek-http`,
   `normalizer-zeek-files`
 - **Dev tooling:** `kafka-ui`, `victim-server`, `victim-client`
+- **Simulation lab (on-demand, profile `sim`):** `simulator` (5 curated attack scenarios with built-in `threat.scores` verification; sub-project #7's stack count of 24 stays at 24 in normal operation because `profiles: [sim]` keeps it hidden from `up -d`. See [simulator/](simulator/))
 
 ## Prerequisites
 
@@ -270,6 +271,41 @@ async for msg in consumer:
 ## Adding a new pcap
 
 See [pcaps/README.md](pcaps/README.md).
+
+## Run attack scenarios
+
+The simulation lab lives at [simulator/](simulator/) (sub-project #8). It ships 5 curated scenarios that target `victim-server`; each verifies that the data plane detects the attack by tailing `threat.scores` for up to 60 seconds.
+
+```bash
+# From data-plane/:
+./scripts/run-scenario.sh --list           # see all 5 scenarios
+./scripts/run-scenario.sh data-exfil       # run one scenario
+./scripts/run-all-scenarios.sh             # run all 5 sequentially
+```
+
+Scenarios:
+- `data-exfil` — FIM (sensitive file) + zeek.http (POST) + zeek.dns (.invalid lookup)
+- `webshell-drop` — FIM (cmd.php) + zeek.http (?c=id query string)
+- `port-scan` — zeek.conn (1024-port asyncio sweep)
+- `dns-tunnel` — zeek.dns (50 random subdomains under exfil.tunnel.invalid)
+- `ransomware-rapid` — FIM (30 file create/truncate/delete cycles)
+
+Each scenario exits `0` on detection (`✓ DETECTED score=X reason=...`), `2` on timeout (`✗ NO DETECTION`), `3` on attack-side failure, `4` on Kafka-unreachable.
+
+**Override the threshold or timeout:**
+```bash
+./scripts/run-scenario.sh data-exfil --threshold 10.0 --timeout 120
+```
+
+**Verify the detection gate is real (sentinel test):**
+```bash
+./scripts/run-scenario.sh data-exfil --threshold 999    # exit 2 (impossibly high threshold)
+```
+
+**Cleanup** — file-based scenarios leave artifacts in `monitored/`:
+```bash
+rm -rf monitored/sensitive_* monitored/cmd_*.php monitored/doc_*
+```
 
 ## Tear down
 

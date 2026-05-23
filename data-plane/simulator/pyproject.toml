@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "intellifim-simulator"
+version = "0.1.0"
+description = "IntelliFIM simulation lab — curated attack scenarios that verify the data plane detects real adversarial activity end-to-end."
+requires-python = ">=3.12"
+dependencies = [
+    "aiokafka>=0.10,<0.13",
+    "intellifim-schemas>=0.4,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pytest-asyncio>=0.23,<0.25",
+]
+
+[project.scripts]
+intellifim-simulator = "simulator.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
